@@ -151,16 +151,18 @@ class DataValidator:
         raw_cols = set(df.columns)
 
         # 3. Candidate Feature Identification
-        for canonical_feat, raw_col_name in self.col_map.items():
-            if raw_col_name in raw_cols:
-                available_features.append(canonical_feat)
+        for k, v in self.col_map.items():
+            if v in raw_cols:
+                available_features.append(k)
+            elif k in raw_cols:
+                available_features.append(v)
             else:
-                missing_features.append(canonical_feat)
+                missing_features.append(k)
 
         # 4. Mandatory Features Check
         for req_feat in self.mandatory_features:
             raw_req_name = self.col_map.get(req_feat, req_feat)
-            if raw_req_name not in raw_cols:
+            if raw_req_name not in raw_cols and req_feat not in raw_cols:
                 missing_cols.append(raw_req_name)
                 errors.append(
                     f"Configured mandatory feature '{req_feat}' (expected in column '{raw_req_name}') "
@@ -168,10 +170,15 @@ class DataValidator:
                 )
 
         # 5. Core Feature Requirement: At least one configured numerical feature MUST exist
-        available_num_features = [
-            feat for feat in self.num_features
-            if self.col_map.get(feat, feat) in raw_cols
-        ]
+        available_num_features = []
+        for feat in self.num_features:
+            if feat in raw_cols:
+                available_num_features.append(feat)
+                continue
+            for k, v in self.col_map.items():
+                if (k == feat and v in raw_cols) or (v == feat and k in raw_cols):
+                    available_num_features.append(feat)
+                    break
         if not available_num_features:
             errors.append(
                 f"Dataset does not contain any configured numerical features. "

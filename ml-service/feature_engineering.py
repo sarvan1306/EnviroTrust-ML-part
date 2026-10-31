@@ -36,11 +36,12 @@ class FeatureEngineeringPipeline:
         Only renames columns that exist in df and are present in column_mapping.
         Does not create duplicate target columns if target name already exists.
         """
-        rename_dict = {
-            raw_name: canonical
-            for canonical, raw_name in self.col_map.items()
-            if raw_name in df.columns and canonical not in df.columns
-        }
+        rename_dict = {}
+        for a, b in self.col_map.items():
+            canonical = a if a in self.all_target_features else (b if b in self.all_target_features else a)
+            raw = b if canonical == a else a
+            if raw in df.columns and canonical not in df.columns:
+                rename_dict[raw] = canonical
         if rename_dict:
             logger.debug(f"Applying column mapping: {rename_dict}")
             mapped_df = df.rename(columns=rename_dict).copy()

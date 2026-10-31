@@ -37,6 +37,14 @@ column_mapping:
   production: "production"
   water_flow: "water_flow"
 
+  # Bangladesh Textile Industry Dataset Mappings
+  "Total Production (kg)": "production"
+  "Total Electricity Use (kWh)": "electricity_consumption"
+  "Extracted Groundwater (Million Liters)": "extracted_groundwater"
+  "Discharged Wastewater (Million Liters)": "water_flow"
+  "COD (mg/L)": "COD_mg_L"
+  "BOD (mg/L)": "BOD_mg_L"
+
   # Legacy aliases for backward compatibility with existing tests & endpoints
   outlet_cod: "outlet_cod"
   bod: "bod"
@@ -69,6 +77,7 @@ features:
     - "electricity_consumption"
     - "production"
     - "water_flow"
+    - "extracted_groundwater"
     - "outlet_cod"
     - "bod"
     - "ph"
@@ -89,6 +98,8 @@ features:
     - "sample_id"
     - "readingId"
     - "sensorId"
+    - "Factory"
+    - "factory"
 
 # Data Splitting Strategy
 splitting:
