@@ -1,0 +1,153 @@
+# ==============================================================================
+# EnviroTrust ML Service — Data & Model Configuration
+# ==============================================================================
+# Flexible configuration supporting both:
+#   A. Environmental-Only monitoring (pH, COD_mg_L, BOD_mg_L, TDS_mg_L, turbidity_NTU,
+#      colour_PtCo, total_solids_mg_L, total_suspended_solids_mg_L, chloride_mg_L,
+#      ammoniacal_nitrogen_mg_L, nitrate_mg_L)
+#   B. Process-Context cross-checking (incorporating electricity_consumption, production, water_flow)
+#
+# All listed features are CANDIDATE features, not guaranteed dataset columns.
+# Column mappings translate authentic dataset columns to canonical names.
+# ==============================================================================
+
+dataset:
+  raw_data_path: "data/raw/extracted_water_quality_samples.csv"
+  validation_data_path: null
+  file_format: "auto"
+
+# Column Mapping System: maps raw columns in authentic files -> canonical features
+column_mapping:
+  # Environmental Measurements (Authentic columns)
+  pH: "pH"
+  COD_mg_L: "COD_mg_L"
+  BOD_mg_L: "BOD_mg_L"
+  TDS_mg_L: "TDS_mg_L"
+  turbidity_NTU: "turbidity_NTU"
+  colour_PtCo: "colour_PtCo"
+  total_solids_mg_L: "total_solids_mg_L"
+  total_suspended_solids_mg_L: "total_suspended_solids_mg_L"
+  chloride_mg_L: "chloride_mg_L"
+  ammoniacal_nitrogen_mg_L: "ammoniacal_nitrogen_mg_L"
+  nitrate_mg_L: "nitrate_mg_L"
+  sulphate_mg_L: "sulphate_mg_L"
+
+  # Factory Operational Context (Authentic columns)
+  electricity_consumption: "electricity_consumption"
+  production: "production"
+  water_flow: "water_flow"
+
+  # Legacy aliases for backward compatibility with existing tests & endpoints
+  outlet_cod: "outlet_cod"
+  bod: "bod"
+  ph: "ph"
+  tds: "tds"
+  temperature: "temperature"
+  turbidity: "turbidity"
+  production_rate: "production_rate"
+  wastewater_flow: "wastewater_flow"
+  treatment_dose: "treatment_dose"
+  operating_mode: "operating_mode"
+  energy_consumption: "energy_consumption"
+
+# Feature definitions for model input matrix
+features:
+  # Candidate numerical features (at least one must be present in the dataset)
+  numerical:
+    - "pH"
+    - "COD_mg_L"
+    - "BOD_mg_L"
+    - "TDS_mg_L"
+    - "turbidity_NTU"
+    - "colour_PtCo"
+    - "total_solids_mg_L"
+    - "total_suspended_solids_mg_L"
+    - "chloride_mg_L"
+    - "ammoniacal_nitrogen_mg_L"
+    - "nitrate_mg_L"
+    - "sulphate_mg_L"
+    - "electricity_consumption"
+    - "production"
+    - "water_flow"
+    - "outlet_cod"
+    - "bod"
+    - "ph"
+    - "tds"
+    - "temperature"
+    - "turbidity"
+    - "production_rate"
+    - "wastewater_flow"
+    - "treatment_dose"
+    - "energy_consumption"
+  # Candidate categorical features
+  categorical:
+    - "operating_mode"
+  # Mandatory features specifically required (if empty, any available numerical feature is accepted)
+  mandatory_features: []
+  # Identifier columns (strictly excluded from ML numerical feature matrices)
+  id_columns:
+    - "sample_id"
+    - "readingId"
+    - "sensorId"
+
+# Data Splitting Strategy
+splitting:
+  strategy: "chronological"     # 'chronological' (time-series) or 'random' (non-time-series)
+  train_ratio: 0.80             # 80% train, 20% validation
+  timestamp_column: "timestamp" # Required when strategy is 'chronological'
+
+# Label-Aware Training (Semi-Supervised / One-Class Anomaly Detection)
+# If a label column is present, Isolation Forest fits strictly on NORMAL records.
+labels:
+  label_column: null            # e.g., "is_anomaly", "label", "tampered"
+  normal_values:
+    - "normal"
+    - "nominal"
+    - "0"
+    - "false"
+    - 0
+    - false
+  anomaly_values:
+    - "anomaly"
+    - "abnormal"
+    - "tampered"
+    - "suspicious"
+    - "1"
+    - "true"
+    - 1
+    - true
+  custom_mapping: null
+
+# Data Preprocessing settings
+preprocessing:
+  numerical_imputation_strategy: "median"       # 'median', 'mean', or 'drop'
+  categorical_imputation_strategy: "most_frequent"
+  categorical_encoding: "onehot"                # 'onehot' with handle_unknown='ignore'
+  scale_features: false
+
+# Isolation Forest Hyperparameters (scikit-learn)
+isolation_forest:
+  n_estimators: 150
+  max_samples: "auto"
+  contamination: "auto"
+  random_state: 42
+  bootstrap: false
+  n_jobs: -1
+
+# Validation and Data Hygiene
+validation:
+  min_rows: 10                                  # Minimum samples required to attempt model training
+  max_missing_ratio: 0.5
+
+# Anomaly Threshold Calibration
+calibration:
+  threshold_percentile: 99.0
+  fallback_threshold: 0.65
+  manual_threshold: null
+
+# Model Artifact Locations
+artifacts:
+  models_dir: "models"
+  model_filename: "isolation_forest.joblib"
+  preprocessor_filename: "preprocessor.joblib"
+  metadata_filename: "model_metadata.json"

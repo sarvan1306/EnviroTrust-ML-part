@@ -1,0 +1,90 @@
+{
+  "model_version": "iforest-demo-v1.0",
+  "algorithm": "sklearn.ensemble.IsolationForest",
+  "training_timestamp_utc": "2026-10-31T15:41:02.459730+00:00",
+  "source_dataset": "/Users/shivsarvansistla/EnviroTrust-ML-part/ml-service/data/synthetic_demo/normal_demo.csv",
+  "has_ground_truth_labels": false,
+  "label_column": null,
+  "normal_baseline_assumption": "Unlabeled dataset: training assumes predominantly normal baseline operations.",
+  "split_strategy": "chronological",
+  "train_samples": 800,
+  "train_samples_fitted": 800,
+  "validation_samples": 200,
+  "validation_samples_calibrated": 200,
+  "validation_anomalies_retained": 0,
+  "feature_schema": {
+    "numerical_features": [
+      "COD_mg_L",
+      "BOD_mg_L",
+      "pH",
+      "TDS_mg_L",
+      "turbidity_NTU",
+      "colour_PtCo",
+      "total_solids_mg_L",
+      "total_suspended_solids_mg_L",
+      "chloride_mg_L",
+      "sulphate_mg_L"
+    ],
+    "categorical_features": [],
+    "feature_names_out": [
+      "num__COD_mg_L",
+      "num__BOD_mg_L",
+      "num__pH",
+      "num__TDS_mg_L",
+      "num__turbidity_NTU",
+      "num__colour_PtCo",
+      "num__total_solids_mg_L",
+      "num__total_suspended_solids_mg_L",
+      "num__chloride_mg_L",
+      "num__sulphate_mg_L"
+    ],
+    "feature_count": 10
+  },
+  "features": [
+    "num__COD_mg_L",
+    "num__BOD_mg_L",
+    "num__pH",
+    "num__TDS_mg_L",
+    "num__turbidity_NTU",
+    "num__colour_PtCo",
+    "num__total_solids_mg_L",
+    "num__total_suspended_solids_mg_L",
+    "num__chloride_mg_L",
+    "num__sulphate_mg_L"
+  ],
+  "calibrated_threshold": 0.0557,
+  "calibration_metadata": {
+    "strategy": "empirical_percentile",
+    "threshold_percentile": 99.0,
+    "validation_sample_count": 200,
+    "threshold": 0.0557,
+    "validation_score_mean": -0.0521,
+    "validation_score_std": 0.0394,
+    "empirical_validation_cutoff_note": "Calibrated on 200 normal validation samples at 99.0th percentile. Real-world operational false-positive rate may differ due to environmental variance."
+  },
+  "validation_score_distribution": {
+    "min": -0.1145,
+    "mean": -0.0521,
+    "median": -0.0619,
+    "max": 0.0824,
+    "95th_percentile": 0.0192,
+    "99th_percentile": 0.0557
+  },
+  "validation_normal_score_distribution": {
+    "min": -0.1145,
+    "mean": -0.0521,
+    "median": -0.0619,
+    "max": 0.0824,
+    "95th_percentile": 0.0192,
+    "99th_percentile": 0.0557
+  },
+  "hyperparameters": {
+    "n_estimators": 150,
+    "max_samples": "auto",
+    "contamination": "auto",
+    "random_state": 42
+  },
+  "model_mode": "SYNTHETIC_DEMO",
+  "data_provenance": "SYNTHETIC",
+  "synthetic_disclaimer": "Demonstration model trained on synthetic wastewater simulation data. Does not establish real-world industrial accuracy or validate detection performance on actual factory telemetry."
+}
