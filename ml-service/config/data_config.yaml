@@ -93,7 +93,8 @@ features:
 # Data Splitting Strategy
 splitting:
   strategy: "chronological"     # 'chronological' (time-series) or 'random' (non-time-series)
-  train_ratio: 0.80             # 80% train, 20% validation
+  train_ratio: 0.80             # 80% train, 20% validation (applied after the held-out test reservation)
+  test_ratio: 0.15              # Held-out test fraction, never used for fitting or calibration (0 disables)
   timestamp_column: "timestamp" # Required when strategy is 'chronological'
 
 # Label-Aware Training (Semi-Supervised / One-Class Anomaly Detection)
@@ -145,9 +146,23 @@ calibration:
   fallback_threshold: 0.65
   manual_threshold: null
 
+# Physical Consistency Rules (explainable checks alongside Isolation Forest)
+# Fixed invariants (pH 0-14, non-negative concentrations, BOD <= COD, chloride + sulphate <= TDS,
+# TS ~= TDS + TSS) plus envelopes learned from NORMAL training records only.
+consistency_rules:
+  enabled: true
+  envelope_quantiles: [0.005, 0.995]          # Per-feature quantile band learned from training data
+  envelope_margin: 0.10                       # Band widened by this fraction of its width on each side
+  ratio_pairs:                                # Learned ratio bands (numerator, denominator)
+    - ["BOD_mg_L", "COD_mg_L"]
+    - ["turbidity_NTU", "total_suspended_solids_mg_L"]
+  ratio_margin: 0.10
+  solids_balance_tolerance: 0.10              # Max relative |TS - (TDS + TSS)| / TS
+
 # Model Artifact Locations
 artifacts:
   models_dir: "models"
   model_filename: "isolation_forest.joblib"
   preprocessor_filename: "preprocessor.joblib"
   metadata_filename: "model_metadata.json"
+  rules_filename: "consistency_rules.json"

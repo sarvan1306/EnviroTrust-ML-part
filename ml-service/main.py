@@ -124,6 +124,9 @@ class CodAnalysisResponse(BaseModel):
     anomaly_score: float
     anomaly_threshold: float
     is_anomaly: bool
+    isolation_forest_flag: Optional[bool] = Field(None, description="Isolation Forest score >= calibrated threshold")
+    rule_violations: List[Dict[str, Any]] = Field(default_factory=list, description="Failed physical consistency checks")
+    detection_sources: List[str] = Field(default_factory=list, description="Detectors that flagged the reading")
     status: str
     model_version: str
     model_mode: str = "AUTHENTIC"
@@ -159,6 +162,9 @@ class TelemetryAnalysisResponse(BaseModel):
     anomaly_score: float
     anomaly_threshold: float
     is_anomaly: bool
+    isolation_forest_flag: Optional[bool] = Field(None, description="Isolation Forest score >= calibrated threshold")
+    rule_violations: List[Dict[str, Any]] = Field(default_factory=list, description="Failed physical consistency checks")
+    detection_sources: List[str] = Field(default_factory=list, description="Detectors that flagged the reading")
     status: str
     model_version: str
     model_mode: str = "AUTHENTIC"
@@ -241,6 +247,9 @@ def analyze_telemetry(
             anomaly_score=result["anomaly_score"],
             anomaly_threshold=result["anomaly_threshold"],
             is_anomaly=result["is_anomaly"],
+            isolation_forest_flag=result.get("isolation_forest_flag"),
+            rule_violations=result.get("rule_violations", []),
+            detection_sources=result.get("detection_sources", []),
             status=result["status"],
             model_version=result["model_version"],
             model_mode=result.get("model_mode", active_pred.model_mode),
@@ -318,6 +327,9 @@ def analyze_cod(
             anomaly_score=result["anomaly_score"],
             anomaly_threshold=result["anomaly_threshold"],
             is_anomaly=result["is_anomaly"],
+            isolation_forest_flag=result.get("isolation_forest_flag"),
+            rule_violations=result.get("rule_violations", []),
+            detection_sources=result.get("detection_sources", []),
             status=result["status"],
             model_version=result["model_version"],
             model_mode=result.get("model_mode", active_pred.model_mode),

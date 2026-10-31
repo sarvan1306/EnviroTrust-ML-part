@@ -1,0 +1,70 @@
+{
+  "enabled": true,
+  "envelope_quantiles": [
+    0.005,
+    0.995
+  ],
+  "envelope_margin": 0.1,
+  "ratio_margin": 0.1,
+  "solids_balance_tolerance": 0.1,
+  "envelopes": {
+    "COD_mg_L": [
+      3488.917,
+      8062.4819
+    ],
+    "BOD_mg_L": [
+      803.891,
+      2045.9236
+    ],
+    "pH": [
+      5.8594,
+      7.7364
+    ],
+    "TDS_mg_L": [
+      2068.9608,
+      3689.5866
+    ],
+    "turbidity_NTU": [
+      83.5015,
+      529.921
+    ],
+    "colour_PtCo": [
+      1703.3342,
+      3814.8852
+    ],
+    "total_solids_mg_L": [
+      2413.3534,
+      4101.0272
+    ],
+    "total_suspended_solids_mg_L": [
+      123.3707,
+      606.2002
+    ],
+    "chloride_mg_L": [
+      241.7308,
+      460.9615
+    ],
+    "sulphate_mg_L": [
+      258.2083,
+      598.0932
+    ]
+  },
+  "ratio_bands": {
+    "BOD_mg_L/COD_mg_L": {
+      "numerator": "BOD_mg_L",
+      "denominator": "COD_mg_L",
+      "range": [
+        0.2072,
+        0.2808
+      ]
+    },
+    "turbidity_NTU/total_suspended_solids_mg_L": {
+      "numerator": "turbidity_NTU",
+      "denominator": "total_suspended_solids_mg_L",
+      "range": [
+        0.6197,
+        1.081
+      ]
+    }
+  }
+}

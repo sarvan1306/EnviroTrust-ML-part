@@ -288,7 +288,11 @@ def test_demo_predictor_scoring_unseen_observations():
     }
     result = predictor.predict_telemetry(payload)
     assert result["is_anomaly"] is True
-    assert result["anomaly_score"] >= result["anomaly_threshold"]
+    # Isolation Forest alone misses most single-feature extremes; the physical rule layer
+    # must flag it and explain which measurement violated the learned operating envelope.
+    assert "physical_rules" in result["detection_sources"]
+    assert any(v["feature"] == "COD_mg_L" for v in result["rule_violations"])
+    assert result["isolation_forest_flag"] == (result["anomaly_score"] >= result["anomaly_threshold"])
 
 
 # ==============================================================================

@@ -17,6 +17,7 @@ import pandas as pd
 import numpy as np
 
 from anomaly_detection import IsolationForestDetector, ModelNotTrainedError
+from consistency_rules import PhysicalConsistencyChecker
 from data_loader import load_config
 from feature_engineering import FeatureEngineeringPipeline
 from preprocessing import DataPreprocessor, MissingFeatureError
@@ -38,6 +39,7 @@ class EnviroTrustPredictor:
         preprocessor_filename: Optional[str] = None,
         metadata_filename: Optional[str] = None,
         model_mode: Optional[str] = None,
+        rules_filename: Optional[str] = None,
     ):
         self.config = load_config(config_path)
         art_cfg = self.config.get("artifacts", {})
@@ -46,11 +48,13 @@ class EnviroTrustPredictor:
         self.model_filename = model_filename or art_cfg.get("model_filename", "isolation_forest.joblib")
         self.prep_filename = preprocessor_filename or art_cfg.get("preprocessor_filename", "preprocessor.joblib")
         self.meta_filename = metadata_filename or art_cfg.get("metadata_filename", "model_metadata.json")
+        self.rules_filename = rules_filename or art_cfg.get("rules_filename", "consistency_rules.json")
         self.model_mode_override = model_mode
 
         self.fe_pipeline = FeatureEngineeringPipeline(self.config)
         self.preprocessor: Optional[DataPreprocessor] = None
         self.detector: Optional[IsolationForestDetector] = None
+        self.rules: Optional[PhysicalConsistencyChecker] = None
         self.metadata: Dict[str, Any] = {}
         self.is_loaded: bool = False
         self.model_mode: str = "AUTHENTIC"
@@ -90,6 +94,7 @@ class EnviroTrustPredictor:
             self.is_loaded = False
             self.detector = None
             self.preprocessor = None
+            self.rules = None
             self.metadata = {}
             return False
 
@@ -98,6 +103,9 @@ class EnviroTrustPredictor:
             self.detector = IsolationForestDetector.load(model_path)
             with open(meta_path, "r", encoding="utf-8") as f:
                 self.metadata = json.load(f)
+            # Rules are optional: models trained before the rule layer existed run without them
+            rules_path = self.models_dir / self.rules_filename
+            self.rules = PhysicalConsistencyChecker.load(rules_path) if rules_path.exists() else None
             self.is_loaded = True
             self.model_mode = self.model_mode_override or self.metadata.get("model_mode", default_mode)
             self.data_provenance = self.metadata.get("data_provenance", "SYNTHETIC" if self.model_mode == "SYNTHETIC_DEMO" else "AUTHENTIC")
@@ -137,6 +145,7 @@ class EnviroTrustPredictor:
             "threshold": self.detector.calibrated_threshold,
             "calibration_metadata": self.metadata.get("calibration_metadata", {}),
             "hyperparameters": self.metadata.get("hyperparameters", {}),
+            "consistency_rules": self.rules.to_dict() if self.rules is not None else None,
         }
 
     def _format_cod_record(self, record: Dict[str, Any]) -> pd.DataFrame:
@@ -238,6 +247,9 @@ class EnviroTrustPredictor:
         # Apply column mapping
         df_mapped = self.fe_pipeline.apply_column_mapping(df_raw_record)
 
+        # Physical rules run on raw mapped values (before any imputation)
+        violations = self.rules.check(df_mapped)[0] if self.rules is not None else []
+
         # Preprocessor transform checks required features and raises MissingFeatureError if absent
         # allow_missing_columns=False ensures no silent fabrication of missing features
         X = self.preprocessor.transform(df_mapped, allow_missing_columns=False)
@@ -245,7 +257,9 @@ class EnviroTrustPredictor:
         scores = self.detector.compute_anomaly_scores(X)
         score = float(scores[0])
         threshold = float(self.detector.calibrated_threshold)
-        is_anomaly = bool(score >= threshold)
+        iforest_flag = bool(score >= threshold)
+        detection_sources = (["isolation_forest"] if iforest_flag else []) + (["physical_rules"] if violations else [])
+        is_anomaly = bool(detection_sources)
         status = "SUSPICIOUS" if is_anomaly else "CONSISTENT"
 
         return {
@@ -255,6 +269,9 @@ class EnviroTrustPredictor:
             "anomaly_score": round(score, 4),
             "anomaly_threshold": round(threshold, 4),
             "is_anomaly": is_anomaly,
+            "isolation_forest_flag": iforest_flag,
+            "rule_violations": violations,
+            "detection_sources": detection_sources,
             "status": status,
             "model_version": self.metadata.get("model_version", "iforest-cod-v1.0"),
             "model_mode": self.model_mode,

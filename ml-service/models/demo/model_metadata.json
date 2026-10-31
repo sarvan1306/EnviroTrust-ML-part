@@ -1,16 +1,16 @@
 {
   "model_version": "iforest-demo-v1.0",
   "algorithm": "sklearn.ensemble.IsolationForest",
-  "training_timestamp_utc": "2026-10-31T15:41:02.459730+00:00",
+  "training_timestamp_utc": "2026-10-31T17:35:16.033376+00:00",
   "source_dataset": "/Users/shivsarvansistla/EnviroTrust-ML-part/ml-service/data/synthetic_demo/normal_demo.csv",
   "has_ground_truth_labels": false,
   "label_column": null,
   "normal_baseline_assumption": "Unlabeled dataset: training assumes predominantly normal baseline operations.",
   "split_strategy": "chronological",
-  "train_samples": 800,
-  "train_samples_fitted": 800,
-  "validation_samples": 200,
-  "validation_samples_calibrated": 200,
+  "train_samples": 680,
+  "train_samples_fitted": 680,
+  "validation_samples": 170,
+  "validation_samples_calibrated": 170,
   "validation_anomalies_retained": 0,
   "feature_schema": {
     "numerical_features": [
@@ -52,37 +52,53 @@
     "num__chloride_mg_L",
     "num__sulphate_mg_L"
   ],
-  "calibrated_threshold": 0.0557,
+  "calibrated_threshold": 0.0694,
   "calibration_metadata": {
     "strategy": "empirical_percentile",
     "threshold_percentile": 99.0,
-    "validation_sample_count": 200,
-    "threshold": 0.0557,
-    "validation_score_mean": -0.0521,
-    "validation_score_std": 0.0394,
-    "empirical_validation_cutoff_note": "Calibrated on 200 normal validation samples at 99.0th percentile. Real-world operational false-positive rate may differ due to environmental variance."
+    "validation_sample_count": 170,
+    "threshold": 0.0694,
+    "validation_score_mean": -0.0485,
+    "validation_score_std": 0.0415,
+    "empirical_validation_cutoff_note": "Calibrated on 170 normal validation samples at 99.0th percentile. Real-world operational false-positive rate may differ due to environmental variance."
   },
   "validation_score_distribution": {
-    "min": -0.1145,
-    "mean": -0.0521,
-    "median": -0.0619,
-    "max": 0.0824,
-    "95th_percentile": 0.0192,
-    "99th_percentile": 0.0557
+    "min": -0.1212,
+    "mean": -0.0485,
+    "median": -0.0558,
+    "max": 0.0795,
+    "95th_percentile": 0.0327,
+    "99th_percentile": 0.0694
   },
   "validation_normal_score_distribution": {
-    "min": -0.1145,
-    "mean": -0.0521,
-    "median": -0.0619,
-    "max": 0.0824,
-    "95th_percentile": 0.0192,
-    "99th_percentile": 0.0557
+    "min": -0.1212,
+    "mean": -0.0485,
+    "median": -0.0558,
+    "max": 0.0795,
+    "95th_percentile": 0.0327,
+    "99th_percentile": 0.0694
   },
   "hyperparameters": {
     "n_estimators": 150,
     "max_samples": "auto",
     "contamination": "auto",
     "random_state": 42
+  },
+  "holdout_test": {
+    "test_ratio": 0.15,
+    "rows": 150,
+    "note": "Never used for fitting or calibration. Reconstruct with train.split_holdout_test."
+  },
+  "consistency_rules": {
+    "enabled": true,
+    "artifact": "consistency_rules.json",
+    "feature_envelopes": 10,
+    "ratio_bands": 2
+  },
+  "validation_flag_rates": {
+    "isolation_forest": 0.0118,
+    "consistency_rules": 0.0294,
+    "combined": 0.0412
   },
   "model_mode": "SYNTHETIC_DEMO",
   "data_provenance": "SYNTHETIC",

@@ -8,6 +8,8 @@ Supports:
   3. Label-aware training (fitting strictly on verified normal baseline records)
   4. Empirical threshold calibration on clean validation sets
   5. Persistence of exact training feature schema alongside artifacts
+  6. Held-out test reservation (splitting.test_ratio), never used for fitting or calibration
+  7. Physical consistency rule envelopes learned on normal training records
 """
 
 import argparse
@@ -21,6 +23,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 
 from anomaly_detection import IsolationForestDetector
+from consistency_rules import PhysicalConsistencyChecker
 from data_loader import load_config, load_dataset, inspect_dataset, format_inspection_report
 from data_validator import DataValidator, DataValidationError, parse_label_value
 from feature_engineering import FeatureEngineeringPipeline
@@ -96,6 +99,49 @@ def split_dataset(
         raise ValueError(f"Unknown splitting strategy '{strategy}'. Supported: 'chronological', 'random'.")
 
 
+def split_holdout_test(
+    df: pd.DataFrame,
+    config: Dict[str, Any],
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Reserve a held-out test subset that is never used for fitting or threshold calibration.
+
+    Controlled by 'splitting.test_ratio' (0 disables the holdout). Uses the same strategy as
+    split_dataset: 'chronological' reserves the latest records, 'random' a seeded random sample.
+    Deterministic for a given dataset and config, so evaluation can reconstruct the exact subset.
+
+    Returns:
+        Tuple of (development subset for train/validation, held-out test subset).
+    """
+    split_cfg = config.get("splitting", {}) or {}
+    test_ratio = float(split_cfg.get("test_ratio", 0.0) or 0.0)
+    if test_ratio <= 0.0:
+        return df.copy(), df.iloc[0:0].copy()
+    if test_ratio >= 1.0:
+        raise ValueError(f"splitting.test_ratio must be in [0, 1), got {test_ratio}.")
+
+    strategy = split_cfg.get("strategy", "random").lower()
+    n_test = int(round(len(df) * test_ratio))
+
+    if strategy == "chronological":
+        ts_col = split_cfg.get("timestamp_column", "timestamp")
+        if ts_col not in df.columns:
+            raise ValueError(
+                f"Chronological holdout requested, but timestamp column '{ts_col}' not found in dataset."
+            )
+        order = pd.to_datetime(df[ts_col], errors="raise").sort_values(kind="mergesort").index
+        df_sorted = df.loc[order]
+        df_dev, df_test = df_sorted.iloc[: len(df) - n_test], df_sorted.iloc[len(df) - n_test:]
+    elif strategy == "random":
+        rs = config.get("isolation_forest", {}).get("random_state", 42)
+        df_dev, df_test = train_test_split(df, test_size=n_test, random_state=rs, shuffle=True)
+    else:
+        raise ValueError(f"Unknown splitting strategy '{strategy}'. Supported: 'chronological', 'random'.")
+
+    logger.info(f"Reserved {len(df_test)} held-out test rows ({strategy}); {len(df_dev)} rows remain for train/validation.")
+    return df_dev.copy(), df_test.copy()
+
+
 def run_training(
     config_path: Union[str, Path] = "config/data_config.yaml",
     data_path: Optional[Union[str, Path]] = None,
@@ -159,14 +205,16 @@ def run_training(
         raise DataValidationError(f"Dataset validation failed: {report.errors}")
     logger.info("Dataset validation passed successfully.")
 
-    # 4. Splitting (Chronological or Random)
+    # 4. Held-out test reservation, then Train/Validation splitting (Chronological or Random)
+    df_dev, df_holdout = split_holdout_test(df_raw, config)
+
     resolved_val_path = validation_path or config.get("dataset", {}).get("validation_data_path")
     if resolved_val_path and Path(resolved_val_path).exists():
         logger.info(f"Loading separate validation dataset from: {resolved_val_path}")
-        df_train_raw = df_raw.copy()
+        df_train_raw = df_dev.copy()
         df_val_raw = load_dataset(resolved_val_path)
     else:
-        df_train_raw, df_val_raw = split_dataset(df_raw, config)
+        df_train_raw, df_val_raw = split_dataset(df_dev, config)
 
     # 5. Label-Aware Handling
     label_cfg = config.get("labels", {})
@@ -224,7 +272,12 @@ def run_training(
     threshold = detector.calibrate_threshold(X_val_calib)
     val_normal_scores = detector.compute_anomaly_scores(X_val_calib)
 
-    # 10. Save Artifacts
+    # 10. Fit Physical Consistency Rules on raw (unimputed) normal training features
+    rules = PhysicalConsistencyChecker(config).fit(df_train_features)
+    val_rule_flags = rules.flags(df_val_calib_features)
+    val_iforest_flags = val_normal_scores >= threshold
+
+    # 11. Save Artifacts
     art_cfg = config.get("artifacts", {})
     models_dir = Path(art_cfg.get("models_dir", "models"))
     models_dir.mkdir(parents=True, exist_ok=True)
@@ -232,9 +285,11 @@ def run_training(
     model_path = models_dir / art_cfg.get("model_filename", "isolation_forest.joblib")
     prep_path = models_dir / art_cfg.get("preprocessor_filename", "preprocessor.joblib")
     meta_path = models_dir / art_cfg.get("metadata_filename", "model_metadata.json")
+    rules_path = models_dir / art_cfg.get("rules_filename", "consistency_rules.json")
 
     detector.save(model_path)
     preprocessor.save(prep_path)
+    rules.save(rules_path)
 
     # Exact training schema recorded
     training_schema = preprocessor.get_training_schema()
@@ -282,6 +337,22 @@ def run_training(
             "max_samples": detector.max_samples,
             "contamination": detector.contamination,
             "random_state": detector.random_state,
+        },
+        "holdout_test": {
+            "test_ratio": float(config.get("splitting", {}).get("test_ratio", 0.0) or 0.0),
+            "rows": int(len(df_holdout)),
+            "note": "Never used for fitting or calibration. Reconstruct with train.split_holdout_test.",
+        },
+        "consistency_rules": {
+            "enabled": rules.enabled,
+            "artifact": rules_path.name,
+            "feature_envelopes": len(rules.envelopes),
+            "ratio_bands": len(rules.ratio_bands),
+        },
+        "validation_flag_rates": {
+            "isolation_forest": round(float(np.mean(val_iforest_flags)), 4) if len(val_iforest_flags) else None,
+            "consistency_rules": round(float(np.mean(val_rule_flags)), 4) if len(val_rule_flags) else None,
+            "combined": round(float(np.mean(val_iforest_flags | val_rule_flags)), 4) if len(val_rule_flags) else None,
         },
     }
 

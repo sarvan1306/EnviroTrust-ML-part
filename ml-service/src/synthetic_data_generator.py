@@ -56,12 +56,15 @@ import data_loader
 from data_loader import load_config
 from data_validator import DataValidator
 from evaluation import evaluate_dataset
-from train import run_training
+from train import run_training, split_holdout_test
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("EnviroTrust.SyntheticGenerator")
 
 # Standard measurement units and features
+# Latest 15% of normal_demo.csv is held out: never used for fitting or threshold calibration
+DEMO_TEST_RATIO = 0.15
+
 SIMULATION_FEATURES = [
     "COD_mg_L",
     "BOD_mg_L",
@@ -392,6 +395,7 @@ def train_demo_model(
     Guarantees:
       1. Trains strictly on normal synthetic observations (normal_demo.csv).
       2. Zero attack records enter the training subset.
+      2a. The latest DEMO_TEST_RATIO of normal records are held out for evaluation only.
       3. Saves artifacts strictly into models/demo/ without overwriting production models.
       4. Stamped with model_mode='SYNTHETIC_DEMO' and data_provenance='SYNTHETIC'.
     """
@@ -419,6 +423,7 @@ def train_demo_model(
     cfg["splitting"]["strategy"] = "chronological"
     cfg["splitting"]["timestamp_column"] = "timestamp"
     cfg["splitting"]["train_ratio"] = 0.80
+    cfg["splitting"]["test_ratio"] = DEMO_TEST_RATIO
 
     # Ensure required features are present
     cfg["features"]["numerical"] = SIMULATION_FEATURES
@@ -451,29 +456,48 @@ def train_demo_model(
 def evaluate_demo_model(
     demo_models_dir: Union[str, Path] = "models/demo",
     demo_data_dir: Union[str, Path] = "data/synthetic_demo",
+    config_path: Union[str, Path] = "config/data_config.yaml",
 ) -> Dict[str, Any]:
     """
-    Evaluate trained synthetic demonstration model against held-out normal test
-    observations and injected attack scenarios. Computes precision, recall, F1, and FPR.
+    Evaluate the trained synthetic demonstration model against the held-out normal test
+    observations (never seen during fitting or threshold calibration) and all injected
+    attack scenarios. Reports combined (Isolation Forest + physical rules) metrics,
+    Isolation-Forest-only metrics, and a per-attack-scenario breakdown.
     """
     models_dir = Path(demo_models_dir)
     data_dir = Path(demo_data_dir)
 
-    norm_csv = data_dir / "normal_demo.csv"
-    atk_csv = data_dir / "attack_demo.csv"
+    df_norm = data_loader.load_dataset(data_dir / "normal_demo.csv")
+    df_atk = data_loader.load_dataset(data_dir / "attack_demo.csv")
 
-    df_norm = data_loader.load_dataset(norm_csv)
-    df_atk = data_loader.load_dataset(atk_csv)
+    with open(models_dir / "model_metadata.json", "r", encoding="utf-8") as f:
+        meta = json.load(f)
+    holdout_ratio = float(meta.get("holdout_test", {}).get("test_ratio", 0.0))
+    if holdout_ratio <= 0.0:
+        raise ValueError(
+            "Demo model was trained without a held-out test split, so no unbiased normal test "
+            "set exists. Retrain with: python -m src.synthetic_data_generator --train"
+        )
 
-    # Use tail of normal data (held-out validation/test) + all attack data
-    n_test_norm = min(200, len(df_norm) // 4)
-    df_test_norm = df_norm.tail(n_test_norm).copy()
+    # Reconstruct the exact held-out subset with the same split used at training time
+    cfg = load_config(config_path)
+    cfg["splitting"]["strategy"] = meta.get("split_strategy", "chronological")
+    cfg["splitting"]["timestamp_column"] = "timestamp"
+    cfg["splitting"]["test_ratio"] = holdout_ratio
+    _, df_test_norm = split_holdout_test(df_norm, cfg)
+
     df_test_combined = pd.concat([df_test_norm, df_atk], ignore_index=True)
+    cfg["artifacts"]["model_filename"] = "isolation_forest_demo.joblib"
+    cfg["artifacts"]["preprocessor_filename"] = "preprocessor_demo.joblib"
+    cfg["features"]["numerical"] = SIMULATION_FEATURES
+    cfg["features"]["categorical"] = []
 
     eval_results = evaluate_dataset(
         data_path=df_test_combined,
+        config_path=cfg,
         models_dir=str(models_dir),
         label_column="is_anomaly",
+        group_column="attack_type",
     )
 
     report = {
@@ -481,12 +505,18 @@ def evaluate_demo_model(
         "data_provenance": "SYNTHETIC",
         "total_test_samples": len(df_test_combined),
         "normal_test_samples": len(df_test_norm),
+        "normal_test_source": "held-out (not used for fitting or threshold calibration)",
         "attack_test_samples": len(df_atk),
         "metrics": eval_results.get("supervised_metrics", {}),
+        "isolation_forest_only_metrics": eval_results.get("isolation_forest_only_metrics", {}),
+        "consistency_rules_only_metrics": eval_results.get("consistency_rules_only_metrics", {}),
+        "per_scenario": eval_results.get("per_group_breakdown", {}),
         "score_distribution": eval_results.get("score_distribution", {}),
         "disclaimer": (
             "Metrics reflect synthetic demonstration performance only and "
-            "do not represent authentic industrial wastewater accuracy."
+            "do not represent authentic industrial wastewater accuracy. The physical "
+            "rules check relationships the generator itself encodes, so high synthetic "
+            "recall is expected and does not transfer automatically to real telemetry."
         ),
     }
 

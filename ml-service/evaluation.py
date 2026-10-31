@@ -1,7 +1,8 @@
 """
 EnviroTrust ML Service — Evaluation Module
 
-Provides quantitative evaluation metrics for Isolation Forest anomaly detection.
+Provides quantitative evaluation metrics for Isolation Forest anomaly detection,
+combined with the physical consistency rule layer when its artifact is present.
 Supports both unsupervised operational distributions and supervised benchmark metrics
 (precision, recall, F1-score, false positive rate, detection rate, ROC-AUC)
 when labeled test cases (string or numerical) are available.
@@ -16,6 +17,7 @@ import pandas as pd
 from sklearn.metrics import confusion_matrix, roc_auc_score, f1_score, precision_score, recall_score
 
 from anomaly_detection import IsolationForestDetector, ModelNotTrainedError
+from consistency_rules import PhysicalConsistencyChecker
 from data_loader import load_config, load_dataset
 from data_validator import parse_label_value, DEFAULT_NORMAL_LABELS, DEFAULT_ANOMALY_LABELS
 from feature_engineering import FeatureEngineeringPipeline
@@ -24,11 +26,47 @@ from preprocessing import DataPreprocessor
 logger = logging.getLogger("EnviroTrust.Evaluation")
 
 
+def _supervised_metrics(
+    labels: np.ndarray, predictions: np.ndarray, scores: Optional[np.ndarray] = None
+) -> Dict[str, Any]:
+    """Precision, recall, F1, FPR and confusion matrix for binary predictions (1 = anomaly)."""
+    prec = float(precision_score(labels, predictions, zero_division=0))
+    rec = float(recall_score(labels, predictions, zero_division=0))
+    f1 = float(f1_score(labels, predictions, zero_division=0))
+    cm = confusion_matrix(labels, predictions, labels=[0, 1])
+    tn, fp, fn, tp = cm.ravel()
+    fpr = float(fp / (fp + tn)) if (fp + tn) > 0 else 0.0
+    detection_rate = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+
+    auc = None
+    if scores is not None:
+        try:
+            auc = float(roc_auc_score(labels, scores))
+        except Exception:
+            auc = None
+
+    return {
+        "precision": round(prec, 4),
+        "recall": round(rec, 4),
+        "detection_rate": round(detection_rate, 4),
+        "f1_score": round(f1, 4),
+        "false_positive_rate": round(fpr, 4),
+        "roc_auc": round(auc, 4) if auc is not None else None,
+        "confusion_matrix": {
+            "true_negatives": int(tn),
+            "false_positives": int(fp),
+            "false_negatives": int(fn),
+            "true_positives": int(tp),
+        },
+    }
+
+
 def evaluate_dataset(
     data_path: Union[str, Path, pd.DataFrame],
     config_path: Union[str, Path, Dict[str, Any]] = "config/data_config.yaml",
     models_dir: Optional[str] = None,
     label_column: Optional[str] = None,
+    group_column: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Evaluate the trained Isolation Forest model on a given dataset.
@@ -38,6 +76,7 @@ def evaluate_dataset(
         config_path: Path to configuration YAML or in-memory dict.
         models_dir: Directory containing trained model artifacts.
         label_column: Optional column name containing string or numerical ground-truth labels.
+        group_column: Optional column (e.g. 'attack_type') for a per-group detection breakdown.
 
     Returns:
         Dict containing score distribution and (if labeled) supervised metrics.
@@ -60,6 +99,8 @@ def evaluate_dataset(
 
     detector = IsolationForestDetector.load(model_path)
     preprocessor = DataPreprocessor.load(prep_path)
+    rules_path = m_dir / art_cfg.get("rules_filename", "consistency_rules.json")
+    rules = PhysicalConsistencyChecker.load(rules_path) if rules_path.exists() else None
 
     if isinstance(data_path, pd.DataFrame):
         df_raw = data_path.copy()
@@ -92,10 +133,15 @@ def evaluate_dataset(
     # Transform without fitting (allow_missing_columns=False ensures strict schema validation)
     X = preprocessor.transform(df_features, allow_missing_columns=False)
 
-    # 3. Compute scores and threshold predictions
+    # 3. Compute scores and threshold predictions, combined with physical rules on raw values
     scores = detector.compute_anomaly_scores(X)
     threshold = float(detector.calibrated_threshold)
-    predictions = (scores >= threshold).astype(int)
+    iforest_predictions = (scores >= threshold).astype(int)
+    if rules is not None:
+        rule_predictions = rules.flags(fe_pipeline.apply_column_mapping(df_raw)).astype(int)
+    else:
+        rule_predictions = np.zeros(len(scores), dtype=int)
+    predictions = iforest_predictions | rule_predictions
 
     score_dist = {
         "sample_count": int(len(scores)),
@@ -114,47 +160,38 @@ def evaluate_dataset(
     report: Dict[str, Any] = {
         "evaluation_dataset": dataset_name,
         "score_distribution": score_dist,
+        "consistency_rules_applied": rules is not None,
+        "flag_counts": {
+            "isolation_forest": int(iforest_predictions.sum()),
+            "consistency_rules": int(rule_predictions.sum()),
+            "combined": int(predictions.sum()),
+        },
     }
 
     # 4. Supervised Metrics (ONLY calculated when verified ground-truth labels exist)
     if labels is not None:
-        prec = float(precision_score(labels, predictions, zero_division=0))
-        rec = float(recall_score(labels, predictions, zero_division=0))
-        f1 = float(f1_score(labels, predictions, zero_division=0))
-        cm = confusion_matrix(labels, predictions)
+        metrics = _supervised_metrics(labels, predictions, scores)
+        report["supervised_metrics"] = metrics
+        report["isolation_forest_only_metrics"] = _supervised_metrics(labels, iforest_predictions, scores)
+        if rules is not None:
+            report["consistency_rules_only_metrics"] = _supervised_metrics(labels, rule_predictions)
 
-        # Confusion matrix elements: tn, fp, fn, tp
-        if cm.shape == (2, 2):
-            tn, fp, fn, tp = cm.ravel()
-            fpr = float(fp / (fp + tn)) if (fp + tn) > 0 else 0.0
-            detection_rate = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
-        else:
-            tn, fp, fn, tp = int(cm[0, 0]), 0, 0, 0
-            fpr = 0.0
-            detection_rate = rec
+        if group_column and group_column in df_raw.columns:
+            groups = df_raw[group_column].astype(str).to_numpy()
+            breakdown: Dict[str, Any] = {}
+            for g in sorted(set(groups)):
+                mask = groups == g
+                breakdown[g] = {
+                    "samples": int(mask.sum()),
+                    "flag_rate_combined": round(float(predictions[mask].mean()), 4),
+                    "flag_rate_isolation_forest": round(float(iforest_predictions[mask].mean()), 4),
+                    "flag_rate_consistency_rules": round(float(rule_predictions[mask].mean()), 4),
+                }
+            report["per_group_breakdown"] = breakdown
 
-        try:
-            auc = float(roc_auc_score(labels, scores))
-        except Exception:
-            auc = None
-
-        report["supervised_metrics"] = {
-            "precision": round(prec, 4),
-            "recall": round(rec, 4),
-            "detection_rate": round(detection_rate, 4),
-            "f1_score": round(f1, 4),
-            "false_positive_rate": round(fpr, 4),
-            "roc_auc": round(auc, 4) if auc is not None else None,
-            "confusion_matrix": {
-                "true_negatives": int(tn),
-                "false_positives": int(fp),
-                "false_negatives": int(fn),
-                "true_positives": int(tp),
-            },
-        }
         logger.info(
-            f"Supervised Evaluation: Precision={prec:.4f}, Recall={rec:.4f}, "
-            f"F1={f1:.4f}, FPR={fpr:.4f}, DetectionRate={detection_rate:.4f}"
+            f"Supervised Evaluation: Precision={metrics['precision']:.4f}, Recall={metrics['recall']:.4f}, "
+            f"F1={metrics['f1_score']:.4f}, FPR={metrics['false_positive_rate']:.4f}"
         )
     else:
         logger.info(
