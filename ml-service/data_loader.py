@@ -216,6 +216,13 @@ DEFAULT_PARAMETER_NAME_MAP: Dict[str, str] = {
     "Nitrate (mg/l)": "nitrate_mg_L",
     "Sulphate (mg/l)": "sulphate_mg_L",
     "Electricity Consumption": "electricity_consumption",
+    # Ontario MISA 2024 Electric Power Generation Mappings
+    "BIOCHEMICAL OXYGEN DEMAND, 5 DAY, TOTAL DEMAND": "BOD_kg_d",
+    "FLOW": "water_flow_m3_d",
+    "ALUMINIUM, UNFILTERED TOTAL": "aluminium_kg_d",
+    "IRON, UNFILTERED TOTAL": "iron_kg_d",
+    "RESIDUE, PARTICULATE": "residue_particulate_kg_d",
+    "SOLVENT EXTRACTABLES": "solvent_extractables_kg_d",
 }
 
 DEFAULT_SAMPLE_ID_MAP: Dict[str, str] = {
@@ -309,3 +316,79 @@ def transpose_parameter_table(
         f"{len(transposed_df.columns) - 1} parameters extracted."
     )
     return transposed_df, metadata
+
+
+def pivot_eav_effluent_table(
+    df: pd.DataFrame,
+    entity_column: str = "Works Name",
+    parameter_column: str = "Parameter Name",
+    value_column: str = "Value",
+    unit_column: Optional[str] = "Unit of Measure",
+    date_column: Optional[str] = "Sample Date",
+    parameter_name_map: Optional[Dict[str, str]] = None,
+) -> Tuple[pd.DataFrame, Dict[str, Dict[str, Any]]]:
+    """
+    Pivot an Entity-Attribute-Value (EAV) / Long format effluent monitoring table
+    (such as Ontario MISA regulatory reporting tables) into an observation-oriented
+    DataFrame where each row is an entity observation and each parameter is a column.
+
+    Parameters:
+        df: Input DataFrame containing long-format parameter rows.
+        entity_column: Column identifying the facility/works name.
+        parameter_column: Column identifying the parameter name.
+        value_column: Column containing the numerical measurement value.
+        unit_column: Optional column containing units of measure.
+        date_column: Optional column containing sample date/timestamp.
+        parameter_name_map: Optional mapping from raw parameter strings to canonical names.
+
+    Returns:
+        Tuple of:
+          - pd.DataFrame: Pivoted observation matrix.
+          - Dict: Parameter-level metadata (units, sample dates, raw names).
+    """
+    if entity_column not in df.columns:
+        raise DataLoadingError(f"Expected entity column '{entity_column}' not found. Available: {list(df.columns)}")
+    if parameter_column not in df.columns:
+        raise DataLoadingError(f"Expected parameter column '{parameter_column}' not found. Available: {list(df.columns)}")
+    if value_column not in df.columns:
+        raise DataLoadingError(f"Expected value column '{value_column}' not found. Available: {list(df.columns)}")
+
+    p_map = parameter_name_map or DEFAULT_PARAMETER_NAME_MAP
+
+    # Extract parameter metadata (units, dates, raw names)
+    metadata: Dict[str, Dict[str, Any]] = {}
+    for _, row in df.iterrows():
+        raw_p = str(row[parameter_column]).strip()
+        canon_p = p_map.get(raw_p, raw_p)
+        if canon_p not in metadata:
+            metadata[canon_p] = {
+                "raw_name": raw_p,
+                "unit": str(row[unit_column]).strip() if unit_column and unit_column in df.columns and pd.notna(row[unit_column]) else None,
+                "sample_date": str(row[date_column]).strip() if date_column and date_column in df.columns and pd.notna(row[date_column]) else None,
+            }
+
+    # Index columns to preserve during pivoting
+    index_cols = [entity_column]
+    if date_column and date_column in df.columns:
+        index_cols.append(date_column)
+    for extra_col in ["Sector", "Control Point Name", "Component Type"]:
+        if extra_col in df.columns and extra_col not in index_cols:
+            index_cols.append(extra_col)
+
+    # Pivot table
+    pivoted_df = df.pivot_table(
+        index=index_cols,
+        columns=parameter_column,
+        values=value_column,
+        aggfunc="first"
+    ).reset_index()
+
+    # Rename parameter columns using mapping
+    rename_cols = {col: p_map.get(col, col) for col in pivoted_df.columns if col not in index_cols}
+    pivoted_df = pivoted_df.rename(columns=rename_cols)
+
+    logger.info(
+        f"Pivoted EAV effluent table: {len(pivoted_df)} facility observations, "
+        f"{len(pivoted_df.columns) - len(index_cols)} parameters extracted."
+    )
+    return pivoted_df, metadata

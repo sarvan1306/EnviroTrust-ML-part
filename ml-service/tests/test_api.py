@@ -6,6 +6,8 @@ These mock fixtures test HTTP endpoints, input validation schemas, and unavailab
 model error responses. They are software-verification mocks only.
 """
 
+import copy
+import os
 from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
@@ -181,3 +183,229 @@ artifacts:
     assert "is_anomaly" in res_data
     assert res_data["status"] in ["CONSISTENT", "SUSPICIOUS"]
     assert res_data["model_version"] == "iforest-cod-v1.0"
+
+
+# ==============================================================================
+# Demo Model & Exact Telemetry Schema Tests
+# ==============================================================================
+
+def test_demo_model_status_returns_200(client: TestClient):
+    """Verify GET /demo/model/status returns 200 with complete demo model metadata."""
+    resp = client.get("/demo/model/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["is_trained"] is True
+    assert data["model_mode"] == "SYNTHETIC_DEMO"
+    assert data["data_provenance"] == "SYNTHETIC"
+    assert data["model_version"] == "iforest-demo-v1.0"
+    assert "feature_schema" in data
+    assert len(data["feature_schema"]["numerical_features"]) == 10
+    assert "threshold" in data
+
+
+def test_analyze_telemetry_exact_request_response_demo(client: TestClient):
+    """
+    Verify POST /demo/analyze/telemetry accepts the exact documented request schema
+    and returns the exact documented response structure with all fields.
+    """
+    request_payload = {
+        "readingId": "TEL-2026-001",
+        "sensorId": "SENSOR-EFFLUENT-01",
+        "timestamp": "2026-11-01T02:00:00Z",
+        "measurements": {
+            "COD_mg_L": 4800.0,
+            "BOD_mg_L": 1200.0,
+            "pH": 7.0,
+            "TDS_mg_L": 2800.0,
+            "turbidity_NTU": 250.0,
+            "colour_PtCo": 2500.0,
+            "total_solids_mg_L": 3100.0,
+            "total_suspended_solids_mg_L": 300.0,
+            "chloride_mg_L": 350.0,
+            "sulphate_mg_L": 400.0,
+        },
+        "context": {
+            "productionRate": 900.0,
+            "wastewaterFlow": 800.0,
+            "operatingMode": "NORMAL",
+            "energyConsumption": 950.0,
+        },
+    }
+
+    resp = client.post("/demo/analyze/telemetry", json=request_payload)
+    assert resp.status_code == 200
+    data = resp.json()
+
+    # Exact field assertions
+    assert data["reading_id"] == "TEL-2026-001"
+    assert data["sensor_id"] == "SENSOR-EFFLUENT-01"
+    assert data["timestamp"] == "2026-11-01T02:00:00Z"
+    assert isinstance(data["anomaly_score"], float)
+    assert isinstance(data["anomaly_threshold"], float)
+    assert isinstance(data["is_anomaly"], bool)
+    assert isinstance(data["isolation_forest_flag"], bool)
+    assert isinstance(data["rule_violations"], list)
+    assert isinstance(data["detection_sources"], list)
+    assert data["status"] in ["CONSISTENT", "SUSPICIOUS"]
+    assert data["model_version"] == "iforest-demo-v1.0"
+    assert data["model_mode"] == "SYNTHETIC_DEMO"
+    assert data["data_provenance"] == "SYNTHETIC"
+    assert isinstance(data["evaluated_features"], list)
+    assert len(data["evaluated_features"]) == 10
+    assert "evaluated_at_utc" in data
+
+
+def test_analyze_telemetry_missing_features_returns_422(client: TestClient):
+    """Verify POST /demo/analyze/telemetry returns 422 when required model features are omitted."""
+    # Omit 'sulphate_mg_L' and 'chloride_mg_L'
+    incomplete_payload = {
+        "readingId": "TEL-INCOMPLETE-001",
+        "measurements": {
+            "COD_mg_L": 4800.0,
+            "BOD_mg_L": 1200.0,
+            "pH": 7.0,
+            "TDS_mg_L": 2800.0,
+            "turbidity_NTU": 250.0,
+            "colour_PtCo": 2500.0,
+            "total_solids_mg_L": 3100.0,
+            "total_suspended_solids_mg_L": 300.0,
+            # Missing chloride_mg_L, sulphate_mg_L
+        },
+    }
+
+    resp = client.post("/demo/analyze/telemetry", json=incomplete_payload)
+    assert resp.status_code == 422
+    assert "Missing required model features" in resp.json()["detail"]
+
+
+def test_analyze_telemetry_invalid_payload_returns_422(client: TestClient):
+    """Verify POST /analyze/telemetry returns 422 for structurally malformed payloads."""
+    # Missing 'measurements' dictionary
+    malformed_payload = {
+        "readingId": "TEL-BAD-001",
+        "context": {"productionRate": 900.0},
+    }
+    resp = client.post("/analyze/telemetry", json=malformed_payload)
+    assert resp.status_code == 422
+
+
+def test_analyze_telemetry_authentic_untrained_returns_503(client: TestClient, tmp_path: Path):
+    """Verify POST /analyze/telemetry in authentic mode returns 503 when model is untrained."""
+    main.predictor = EnviroTrustPredictor(models_dir=str(tmp_path / "empty_dir"))
+    payload = {
+        "measurements": {"COD_mg_L": 5000.0, "pH": 7.0},
+    }
+    resp = client.post("/analyze/telemetry", json=payload)
+    assert resp.status_code == 503
+    assert "Model is not trained" in resp.json()["detail"]
+
+
+def test_telemetry_input_immutability(client: TestClient):
+    """Verify that incoming telemetry dictionary is never modified in-place by the ML service."""
+    telemetry_input = {
+        "readingId": "IMMUTABLE-001",
+        "sensorId": "SENSOR-01",
+        "timestamp": "2026-11-01T02:00:00Z",
+        "measurements": {
+            "COD_mg_L": 5000.0,
+            "BOD_mg_L": 1250.0,
+            "pH": 6.8,
+            "TDS_mg_L": 2700.0,
+            "turbidity_NTU": 220.0,
+            "colour_PtCo": 2400.0,
+            "total_solids_mg_L": 3000.0,
+            "total_suspended_solids_mg_L": 280.0,
+            "chloride_mg_L": 340.0,
+            "sulphate_mg_L": 390.0,
+        },
+        "context": {
+            "productionRate": 850.0,
+            "operatingMode": "NORMAL",
+        },
+    }
+    input_snapshot = copy.deepcopy(telemetry_input)
+
+    resp = client.post("/demo/analyze/telemetry", json=telemetry_input)
+    assert resp.status_code == 200
+
+    # Ensure input_snapshot and telemetry_input remain strictly identical
+    assert telemetry_input == input_snapshot
+
+
+# ==============================================================================
+# Backend Authentication Mechanism Tests
+# ==============================================================================
+
+def test_backend_authentication_open_when_env_not_configured(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    """Verify service runs in open mode when no auth token is set in environment."""
+    for var in ["ML_SERVICE_TOKEN", "ENVIROTRUST_ML_TOKEN", "ML_SERVICE_API_KEY", "X_ML_SERVICE_TOKEN"]:
+        monkeypatch.delenv(var, raising=False)
+
+    # Health check is 200 without auth
+    assert client.get("/health").status_code == 200
+
+    # Model status is 200 without auth
+    assert client.get("/model/status").status_code == 200
+
+
+def test_backend_authentication_enforced_when_token_configured(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    """
+    Verify backend authentication when ML_SERVICE_TOKEN is set in environment.
+    - Requests without token return 401 Unauthorized
+    - Requests with invalid token return 401 Unauthorized
+    - Requests with matching X-ML-Service-Token header succeed
+    - Requests with matching Authorization: Bearer <token> succeed
+    - Requests with matching X-API-Key succeed
+    - /health endpoint remains unauthenticated (200 OK)
+    """
+    token_val = "envirotrust-backend-secret-xyz"
+    monkeypatch.setenv("ML_SERVICE_TOKEN", token_val)
+
+    # 1. Health check remains unauthenticated
+    h_resp = client.get("/health")
+    assert h_resp.status_code == 200
+
+    # 2. Protected endpoint without token -> 401
+    status_no_auth = client.get("/model/status")
+    assert status_no_auth.status_code == 401
+    assert "missing" in status_no_auth.json()["detail"].lower()
+
+    # 3. Protected endpoint with invalid token -> 401
+    status_bad_auth = client.get("/model/status", headers={"X-ML-Service-Token": "wrong-token"})
+    assert status_bad_auth.status_code == 401
+    assert "invalid" in status_bad_auth.json()["detail"].lower()
+
+    # 4. Protected endpoint with correct X-ML-Service-Token -> 200
+    status_good_auth = client.get("/model/status", headers={"X-ML-Service-Token": token_val})
+    assert status_good_auth.status_code == 200
+
+    # 5. Protected endpoint with Authorization: Bearer <token> -> 200
+    status_bearer = client.get("/model/status", headers={"Authorization": f"Bearer {token_val}"})
+    assert status_bearer.status_code == 200
+
+    # 6. Protected endpoint with X-API-Key -> 200
+    status_apikey = client.get("/model/status", headers={"X-API-Key": token_val})
+    assert status_apikey.status_code == 200
+
+    # 7. Telemetry endpoint with token
+    payload = {
+        "measurements": {
+            "COD_mg_L": 4800.0,
+            "BOD_mg_L": 1200.0,
+            "pH": 7.0,
+            "TDS_mg_L": 2800.0,
+            "turbidity_NTU": 250.0,
+            "colour_PtCo": 2500.0,
+            "total_solids_mg_L": 3100.0,
+            "total_suspended_solids_mg_L": 300.0,
+            "chloride_mg_L": 350.0,
+            "sulphate_mg_L": 400.0,
+        }
+    }
+    # Without header -> 401
+    tel_no_auth = client.post("/demo/analyze/telemetry", json=payload)
+    assert tel_no_auth.status_code == 401
+
+    # With header -> 200
+    tel_with_auth = client.post("/demo/analyze/telemetry", json=payload, headers={"X-ML-Service-Token": token_val})
+    assert tel_with_auth.status_code == 200

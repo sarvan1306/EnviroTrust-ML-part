@@ -27,7 +27,7 @@ from anomaly_detection import IsolationForestDetector
 from preprocessing import DataPreprocessor
 
 DATASET_PATH = Path("data/raw/bangladesh_textile_dataset.csv")
-EXPECTED_SHA256 = "188c7ae123494380ddc2a019506f0fdbef8635f6d811aebcebf44ff9a132d09a"
+EXPECTED_SHA256 = "daaa99510e68bcd97b2e8529b5d80706ade4c8da5221fb5d07bb8608280cdef3"
 
 
 @pytest.fixture

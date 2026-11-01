@@ -45,6 +45,14 @@ column_mapping:
   "COD (mg/L)": "COD_mg_L"
   "BOD (mg/L)": "BOD_mg_L"
 
+  # Ontario MISA 2024 Electric Power Generation Mappings
+  "BIOCHEMICAL OXYGEN DEMAND, 5 DAY, TOTAL DEMAND": "BOD_kg_d"
+  "FLOW": "water_flow"
+  "RESIDUE, PARTICULATE": "residue_particulate_kg_d"
+  "ALUMINIUM, UNFILTERED TOTAL": "aluminium_kg_d"
+  "IRON, UNFILTERED TOTAL": "iron_kg_d"
+  "SOLVENT EXTRACTABLES": "solvent_extractables_kg_d"
+
   # Legacy aliases for backward compatibility with existing tests & endpoints
   outlet_cod: "outlet_cod"
   bod: "bod"
@@ -78,6 +86,12 @@ features:
     - "production"
     - "water_flow"
     - "extracted_groundwater"
+    - "BOD_kg_d"
+    - "water_flow_m3_d"
+    - "residue_particulate_kg_d"
+    - "aluminium_kg_d"
+    - "iron_kg_d"
+    - "solvent_extractables_kg_d"
     - "outlet_cod"
     - "bod"
     - "ph"
@@ -100,6 +114,13 @@ features:
     - "sensorId"
     - "Factory"
     - "factory"
+    - "Works Name"
+    - "works_name"
+    - "Control Point Name"
+    - "Sector"
+    - "Component Type"
+    - "Unit of Measure"
+    - "Sample Date"
 
 # Data Splitting Strategy
 splitting:

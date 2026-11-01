@@ -143,17 +143,19 @@ def split_holdout_test(
 
 
 def run_training(
-    config_path: Union[str, Path] = "config/data_config.yaml",
+    config_path: Union[str, Path, Dict[str, Any]] = "config/data_config.yaml",
     data_path: Optional[Union[str, Path]] = None,
     validation_path: Optional[Union[str, Path]] = None,
+    strategy: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Execute Isolation Forest training workflow using authentic datasets.
 
     Parameters:
-        config_path: Path to configuration YAML.
+        config_path: Path to configuration YAML, or in-memory dict.
         data_path: Optional override path for training dataset.
         validation_path: Optional override path for validation dataset.
+        strategy: Optional override for splitting strategy ('chronological' or 'random').
 
     Returns:
         Manifest dictionary with training metadata.
@@ -162,7 +164,11 @@ def run_training(
         TrainingHaltedError: If authentic dataset is missing or unconfigured.
         DataValidationError: If dataset fails structural validation.
     """
-    config = load_config(config_path)
+    config = load_config(config_path) if not isinstance(config_path, dict) else config_path.copy()
+    if strategy is not None:
+        if "splitting" not in config:
+            config["splitting"] = {}
+        config["splitting"]["strategy"] = strategy
 
     # 1. Resolve dataset path
     resolved_data_path = data_path or config.get("dataset", {}).get("raw_data_path")
@@ -368,13 +374,15 @@ if __name__ == "__main__":
     parser.add_argument("--config", default="config/data_config.yaml", help="Path to config YAML")
     parser.add_argument("--data-path", default=None, help="Path to authentic dataset (CSV or Excel)")
     parser.add_argument("--val-path", default=None, help="Path to authentic validation dataset")
+    parser.add_argument("--strategy", choices=["chronological", "random"], default=None, help="Override splitting strategy ('chronological' or 'random')")
     args = parser.parse_args()
 
     try:
         manifest = run_training(
             config_path=args.config,
             data_path=args.data_path,
-            validation_path=args.val_path
+            validation_path=args.val_path,
+            strategy=args.strategy,
         )
         print("\nTraining completed successfully:")
         print(json.dumps(manifest, indent=2))
