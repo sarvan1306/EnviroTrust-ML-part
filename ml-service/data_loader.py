@@ -10,6 +10,7 @@ or inventing missing measurements.
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 import logging
+import re
 import numpy as np
 import pandas as pd
 import yaml
@@ -392,3 +393,237 @@ def pivot_eav_effluent_table(
         f"{len(pivoted_df.columns) - len(index_cols)} parameters extracted."
     )
     return pivoted_df, metadata
+
+
+# ==============================================================================
+# Cross-Industry & WWTP Dataset Ingestion Helpers
+# ==============================================================================
+
+def parse_midpoint_range(val: Any) -> float:
+    """
+    Convert string ranges (e.g., '2000–11,588', '6.3–6.98', '1200–4000 (BOD5)', '<10')
+    into clean numeric midpoints for analytical and modelling purposes.
+    """
+    if pd.isna(val):
+        return np.nan
+    s = str(val).strip()
+    if s in ["-", "<10", "", "N/A*", "N/A"]:
+        return np.nan
+    # Remove annotations like (BOD5), (KN), (Influent), (25-75%)
+    val_clean = re.sub(r"\([^)]*\)", "", s).replace(",", "").strip()
+    # Handle en-dash or hyphen ranges
+    if "–" in val_clean or "-" in val_clean:
+        parts = re.split(r"–|-", val_clean)
+        try:
+            nums = [float(p.strip()) for p in parts if p.strip()]
+            return float(np.mean(nums)) if nums else np.nan
+        except (ValueError, TypeError):
+            return np.nan
+    try:
+        return float(val_clean)
+    except (ValueError, TypeError):
+        return np.nan
+
+
+def parse_microorganism_dataset(
+    df: pd.DataFrame,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Parse the literature cross-industry wastewater dataset (microorganism.csv).
+    Converts string parameter ranges into numeric midpoints and aligns them
+    with canonical EnviroTrust feature nomenclature.
+
+    Parameters:
+        df: Raw DataFrame loaded from microorganism.csv
+
+    Returns:
+        Tuple of:
+          - pd.DataFrame: Cleaned DataFrame with 27 industrial streams and numeric parameters
+          - Dict[str, Any]: Metadata containing raw ranges, non-null counts, and sector classifications
+    """
+    required_col = "Wastewater Type"
+    if required_col not in df.columns:
+        raise DataLoadingError(f"Expected column '{required_col}' not found. Available: {list(df.columns)}")
+
+    cleaned_df = pd.DataFrame()
+    cleaned_df["wastewater_type"] = df["Wastewater Type"].astype(str).str.strip()
+
+    col_mappings = {
+        "COD (mg/L)": "COD_mg_L",
+        "BOD (mg/L)": "BOD_mg_L",
+        "TS (mg/L)": "total_solids_mg_L",
+        "SS (mg/L)": "total_suspended_solids_mg_L",
+        "VSS (mg/L)": "volatile_suspended_solids_mg_L",
+        "TN (mg/L)": "total_nitrogen_mg_L",
+        "TP (mg/L)": "total_phosphorus_mg_L",
+        "N-NH4+ (mg/L)": "ammoniacal_nitrogen_mg_L",
+        "pH": "pH",
+    }
+
+    metadata: Dict[str, Any] = {
+        "total_streams": len(df),
+        "raw_columns": list(df.columns),
+        "parameter_stats": {},
+    }
+
+    for raw_col, canon_col in col_mappings.items():
+        if raw_col in df.columns:
+            cleaned_df[canon_col] = df[raw_col].apply(parse_midpoint_range)
+            metadata["parameter_stats"][canon_col] = {
+                "raw_column": raw_col,
+                "non_null_count": int(cleaned_df[canon_col].notna().sum()),
+                "min": float(cleaned_df[canon_col].min()) if cleaned_df[canon_col].notna().any() else None,
+                "max": float(cleaned_df[canon_col].max()) if cleaned_df[canon_col].notna().any() else None,
+                "mean": float(cleaned_df[canon_col].mean()) if cleaned_df[canon_col].notna().any() else None,
+            }
+
+    if "Reference Citation" in df.columns:
+        cleaned_df["reference_citation"] = df["Reference Citation"].astype(str).str.strip()
+
+    # Calculate BOD/COD ratio where both parameters are available
+    cleaned_df["bod_cod_ratio"] = cleaned_df["BOD_mg_L"] / cleaned_df["COD_mg_L"]
+
+    logger.info(
+        f"Parsed cross-industry microorganism dataset: {len(cleaned_df)} wastewater streams, "
+        f"{len(cleaned_df.columns)} standardized columns."
+    )
+    return cleaned_df, metadata
+
+
+def parse_china_wwtp_dataset(
+    df: pd.DataFrame,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Parse the Yellow River Basin industrial WWTP dataset (china.csv).
+    Extracts influent water quality concentrations, energy metrics, and operational costs.
+
+    Parameters:
+        df: Raw DataFrame loaded from china.csv
+
+    Returns:
+        Tuple of:
+          - pd.DataFrame: Valid parameters with numeric Average, Median, and Range midpoints
+          - Dict[str, Any]: Metadata covering unmeasured parameters (pH, TDS) and unit definitions
+    """
+    param_col = "Parameter / Metric"
+    if param_col not in df.columns:
+        raise DataLoadingError(f"Expected column '{param_col}' not found. Available: {list(df.columns)}")
+
+    metadata: Dict[str, Any] = {
+        "total_raw_rows": len(df),
+        "unmeasured_parameters": [],
+        "water_quality_parameters": [],
+        "operational_parameters": [],
+    }
+
+    # Separate unmeasured parameters
+    unmeasured_mask = df["Average Value"].astype(str).str.strip() == "N/A*"
+    unmeasured_df = df[unmeasured_mask]
+    for _, row in unmeasured_df.iterrows():
+        metadata["unmeasured_parameters"].append(str(row[param_col]).strip())
+
+    valid_df = df[~unmeasured_mask].copy()
+    valid_df["average_value"] = pd.to_numeric(valid_df["Average Value"], errors="coerce")
+    valid_df["median_value"] = pd.to_numeric(valid_df["Median Value"], errors="coerce")
+
+    # Range parsing
+    if "25%-75% / Min-Max Range" in valid_df.columns:
+        valid_df["range_midpoint"] = valid_df["25%-75% / Min-Max Range"].apply(parse_midpoint_range)
+
+    # Classify parameters
+    if "Unit / Notes" in valid_df.columns:
+        for _, row in valid_df.iterrows():
+            p_name = str(row[param_col]).strip()
+            unit_str = str(row["Unit / Notes"])
+            if "mg/L" in unit_str:
+                metadata["water_quality_parameters"].append(p_name)
+            else:
+                metadata["operational_parameters"].append(p_name)
+
+    logger.info(
+        f"Parsed China WWTP dataset: {len(valid_df)} measured parameters, "
+        f"{len(metadata['unmeasured_parameters'])} unmeasured (N/A*)."
+    )
+    return valid_df, metadata
+
+
+def parse_mining_dataset(
+    df: pd.DataFrame,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Parse the industrial wastewater and mining effluent dataset (mining.csv).
+    Standardizes water quality parameters (pH, TDS, TOC, Hardness) and associates
+    industry activities and critical mineral recovery potential.
+
+    Parameters:
+        df: Raw DataFrame loaded from mining.csv
+
+    Returns:
+        Tuple of:
+          - pd.DataFrame: Standardized DataFrame with 22 industrial activities and numeric parameters
+          - Dict[str, Any]: Metadata containing sector counts, parameter ranges, and critical mineral notes
+    """
+    required_cols = ["Industry Category", "Industrial Activity", "Median pH", "Median TDS (mg/L)"]
+    for rc in required_cols:
+        if rc not in df.columns:
+            raise DataLoadingError(f"Expected column '{rc}' not found in mining dataset. Available: {list(df.columns)}")
+
+    clean_df = pd.DataFrame()
+    clean_df["industry_category"] = df["Industry Category"].astype(str).str.strip()
+    clean_df["industrial_activity"] = df["Industrial Activity"].astype(str).str.strip()
+
+    # Numeric conversion helper
+    def _clean_num(val: Any) -> float:
+        if pd.isna(val):
+            return np.nan
+        s = str(val).replace(",", "").strip()
+        if s in ["N/A", "NaN", "-", "", "None"]:
+            return np.nan
+        try:
+            return float(s)
+        except (ValueError, TypeError):
+            return np.nan
+
+    clean_df["pH"] = df["Median pH"].apply(_clean_num)
+    clean_df["TDS_mg_L"] = df["Median TDS (mg/L)"].apply(_clean_num)
+
+    if "Median TOC (mg/L)" in df.columns:
+        clean_df["TOC_mg_L"] = df["Median TOC (mg/L)"].apply(_clean_num)
+
+    if "Hardness (mg/L as CaCO3)" in df.columns:
+        clean_df["hardness_mg_L_CaCO3"] = df["Hardness (mg/L as CaCO3)"].apply(_clean_num)
+
+    if "Wastewater Volume / Energy Metric" in df.columns:
+        clean_df["wastewater_volume_metric"] = df["Wastewater Volume / Energy Metric"].astype(str).str.strip()
+
+    if "Notes / Critical Mineral Recovery Potential" in df.columns:
+        clean_df["notes_recovery_potential"] = df["Notes / Critical Mineral Recovery Potential"].astype(str).str.strip()
+
+    metadata: Dict[str, Any] = {
+        "total_activities": len(clean_df),
+        "industry_categories": clean_df["industry_category"].value_counts().to_dict(),
+        "parameter_stats": {
+            "pH": {"non_null": int(clean_df["pH"].notna().sum()), "min": float(clean_df["pH"].min()), "max": float(clean_df["pH"].max())},
+            "TDS_mg_L": {"non_null": int(clean_df["TDS_mg_L"].notna().sum()), "min": float(clean_df["TDS_mg_L"].min()), "max": float(clean_df["TDS_mg_L"].max())},
+        },
+    }
+
+    if "TOC_mg_L" in clean_df.columns:
+        metadata["parameter_stats"]["TOC_mg_L"] = {
+            "non_null": int(clean_df["TOC_mg_L"].notna().sum()),
+            "min": float(clean_df["TOC_mg_L"].min()) if clean_df["TOC_mg_L"].notna().any() else None,
+            "max": float(clean_df["TOC_mg_L"].max()) if clean_df["TOC_mg_L"].notna().any() else None,
+        }
+
+    if "hardness_mg_L_CaCO3" in clean_df.columns:
+        metadata["parameter_stats"]["hardness_mg_L_CaCO3"] = {
+            "non_null": int(clean_df["hardness_mg_L_CaCO3"].notna().sum()),
+            "min": float(clean_df["hardness_mg_L_CaCO3"].min()) if clean_df["hardness_mg_L_CaCO3"].notna().any() else None,
+            "max": float(clean_df["hardness_mg_L_CaCO3"].max()) if clean_df["hardness_mg_L_CaCO3"].notna().any() else None,
+        }
+
+    logger.info(
+        f"Parsed industrial mining dataset: {len(clean_df)} activities across "
+        f"{len(metadata['industry_categories'])} sectors."
+    )
+    return clean_df, metadata

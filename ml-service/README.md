@@ -25,10 +25,21 @@ EnviroTrust-ML-part/
     │   └── data_config.yaml         # Configurable column mappings & hyperparameters
     ├── data/
     │   ├── raw/                     # Authentic research data (preserved and immutable)
-    │   │   ├── extracted_water_quality_samples.csv
+    │   │   ├── Mining_Analysis.ipynb    # Mining & critical mineral recovery notebook
+    │   │   ├── bangladesh_textile_dataset.csv
+    │   │   ├── bangladesh_textile_industry_anomaly_detection.ipynb
+    │   │   ├── china.csv            # Yellow River Basin WWTP influent & cost metrics
+    │   │   ├── chinapy.ipynb
     │   │   ├── data_spreadsheet_-_Sheet1.csv
+    │   │   ├── extracted_water_quality_samples.csv
     │   │   ├── extracted_water_quality_samples_v2.csv
-    │   │   └── industrial_water_pollution_ml.ipynb
+    │   │   ├── industrial_water_pollution_ml.ipynb
+    │   │   ├── microorganism.csv    # 27 industrial streams anaerobic digestion literature
+    │   │   ├── microorganismpy.ipynb
+    │   │   ├── mining.csv           # 22 industrial activities mining & mineral recovery
+    │   │   ├── misa_electric_power_generation_2024.csv
+    │   │   ├── sheet3.ipynb
+    │   │   └── Untitled spreadsheet - Sheet3.csv
     │   ├── synthetic_demo/          # Synthetic demonstration data (isolated)
     │   │   ├── normal_demo.csv      # 1,000 normal synthetic observations
     │   │   └── attack_demo.csv      # 200 labelled tampering attack observations
@@ -43,7 +54,7 @@ EnviroTrust-ML-part/
     ├── src/
     │   ├── __init__.py
     │   └── synthetic_data_generator.py # Synthetic dataset generator & demo trainer
-    ├── tests/                       # 153 unit & integration tests
+    ├── tests/                       # 177 unit & integration tests
     │   ├── test_api.py              # Endpoint tests, auth, schema & error handling
     │   ├── test_audit_fixes.py
     │   ├── test_authentic_data_integration.py
@@ -57,6 +68,7 @@ EnviroTrust-ML-part/
     │   ├── test_further_data_integration.py
     │   ├── test_isolation_forest.py
     │   ├── test_misa_power_integration.py # Ontario MISA 2024 power generation tests
+    │   ├── test_new_data_integration.py # China WWTP, 27-sector micro & 22-activity mining tests
     │   ├── test_preprocessing.py
     │   ├── test_store_and_forward.py # Edge gateway offline buffering & automatic retry
     │   ├── test_synthetic_demo.py   # Demonstration mode & attack scenario tests
@@ -532,7 +544,7 @@ Evaluates against the 150 held-out normal records and all 200 attack records, re
 ```bash
 pytest -v
 ```
-**153 passing tests** verifying generator reproducibility, schema contracts, physical interrelationships, data isolation, artifact protection, the physical rule layer, held-out evaluation, authentic dataset integrations (Bangladesh & MISA), backend token authentication, physical sensor tamper alarm engine, cryptographic audit ledger, edge gateway offline store-and-forward queue, and REST API endpoints.
+**177 passing tests** verifying generator reproducibility, schema contracts, physical interrelationships, data isolation, artifact protection, the physical rule layer, held-out evaluation, authentic dataset integrations (Bangladesh, Ontario MISA, China WWTP, 27-sector Microorganism literature & 22-activity Mining study), backend token authentication, physical sensor tamper alarm engine, cryptographic audit ledger, edge gateway offline store-and-forward queue, and REST API endpoints.
 
 ---
 

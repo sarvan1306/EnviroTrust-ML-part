@@ -53,6 +53,29 @@ column_mapping:
   "IRON, UNFILTERED TOTAL": "iron_kg_d"
   "SOLVENT EXTRACTABLES": "solvent_extractables_kg_d"
 
+  # Cross-Industry Microorganism Dataset Mappings
+  "TS (mg/L)": "total_solids_mg_L"
+  "SS (mg/L)": "total_suspended_solids_mg_L"
+  "VSS (mg/L)": "volatile_suspended_solids_mg_L"
+  "TN (mg/L)": "total_nitrogen_mg_L"
+  "TP (mg/L)": "total_phosphorus_mg_L"
+  "N-NH4+ (mg/L)": "ammoniacal_nitrogen_mg_L"
+
+  # Yellow River Basin WWTP Dataset Mappings
+  "Chemical Oxygen Demand (COD)": "COD_mg_L"
+  "Biochemical Oxygen Demand (BOD)": "BOD_mg_L"
+  "Ammoniacal Nitrogen (NH3-N)": "ammoniacal_nitrogen_mg_L"
+  "Total Nitrogen (TN)": "total_nitrogen_mg_L"
+  "Total Phosphorus (TP)": "total_phosphorus_mg_L"
+  "Electricity Consumption": "electricity_consumption"
+  "Operational Cost": "operational_cost"
+
+  # Industrial Mining & Critical Mineral Recovery Mappings
+  "Median TDS (mg/L)": "TDS_mg_L"
+  "Median pH": "pH"
+  "Median TOC (mg/L)": "TOC_mg_L"
+  "Hardness (mg/L as CaCO3)": "hardness_mg_L_CaCO3"
+
   # Legacy aliases for backward compatibility with existing tests & endpoints
   outlet_cod: "outlet_cod"
   bod: "bod"
@@ -102,6 +125,13 @@ features:
     - "wastewater_flow"
     - "treatment_dose"
     - "energy_consumption"
+    - "total_nitrogen_mg_L"
+    - "total_phosphorus_mg_L"
+    - "volatile_suspended_solids_mg_L"
+    - "operational_cost"
+    - "bod_cod_ratio"
+    - "TOC_mg_L"
+    - "hardness_mg_L_CaCO3"
   # Candidate categorical features
   categorical:
     - "operating_mode"
@@ -121,6 +151,21 @@ features:
     - "Component Type"
     - "Unit of Measure"
     - "Sample Date"
+    - "Wastewater Type"
+    - "wastewater_type"
+    - "Reference Citation"
+    - "reference_citation"
+    - "Parameter / Metric"
+    - "Unit / Notes"
+    - "25%-75% / Min-Max Range"
+    - "Industry Category"
+    - "industry_category"
+    - "Industrial Activity"
+    - "industrial_activity"
+    - "Wastewater Volume / Energy Metric"
+    - "wastewater_volume_metric"
+    - "Notes / Critical Mineral Recovery Potential"
+    - "notes_recovery_potential"
 
 # Rolling-Window Features (stuck / frozen sensor detection)
 # Adds '<feature>_roll_log_std' = log1p(trailing-window std) per base measurement, per sensor
