@@ -11,6 +11,7 @@ and refuses to silently invent missing features required by the trained model.
 Rolling-window features need history a single record does not carry, so the predictor
 keeps the last few readings per sensorId in memory. The buffer is per process: with
 several workers, route each sensor to one worker or its windows will be incomplete.
+The CUSUM statistics are kept per sensorId the same way.
 """
 
 from collections import deque
@@ -24,6 +25,7 @@ import numpy as np
 
 from anomaly_detection import IsolationForestDetector, ModelNotTrainedError
 from consistency_rules import PhysicalConsistencyChecker
+from cusum import CusumDetector
 from data_loader import load_config
 from feature_engineering import DEFAULT_STREAM_KEY, ROLLING_SUFFIX, FeatureEngineeringPipeline
 from preprocessing import DataPreprocessor, MissingFeatureError
@@ -46,6 +48,7 @@ class EnviroTrustPredictor:
         metadata_filename: Optional[str] = None,
         model_mode: Optional[str] = None,
         rules_filename: Optional[str] = None,
+        cusum_filename: Optional[str] = None,
     ):
         self.config = load_config(config_path)
         art_cfg = self.config.get("artifacts", {})
@@ -55,20 +58,23 @@ class EnviroTrustPredictor:
         self.prep_filename = preprocessor_filename or art_cfg.get("preprocessor_filename", "preprocessor.joblib")
         self.meta_filename = metadata_filename or art_cfg.get("metadata_filename", "model_metadata.json")
         self.rules_filename = rules_filename or art_cfg.get("rules_filename", "consistency_rules.json")
+        self.cusum_filename = cusum_filename or art_cfg.get("cusum_filename", "cusum.json")
         self.model_mode_override = model_mode
 
         self.fe_pipeline = FeatureEngineeringPipeline(self.config)
         self.preprocessor: Optional[DataPreprocessor] = None
         self.detector: Optional[IsolationForestDetector] = None
         self.rules: Optional[PhysicalConsistencyChecker] = None
+        self.cusum: Optional[CusumDetector] = None
         self.metadata: Dict[str, Any] = {}
         self.is_loaded: bool = False
         self.model_mode: str = "AUTHENTIC"
         self.data_provenance: str = "AUTHENTIC"
 
-        # Rolling-window state: features the loaded model expects, and recent readings per sensor
+        # Sequential state per sensor: rolling-window history and CUSUM statistics (one lock guards both)
         self.rolling_features: List[str] = []
         self._history: Dict[str, Deque[Dict[str, Any]]] = {}
+        self._cusum_states: Dict[str, Dict[str, Any]] = {}
         self._history_lock = threading.Lock()
 
         # Attempt to load model on initialization
@@ -102,6 +108,7 @@ class EnviroTrustPredictor:
         self.rolling_features = []
         with self._history_lock:
             self._history = {}
+            self._cusum_states = {}
 
         if not (model_path.exists() and prep_path.exists() and meta_path.exists()):
             logger.info(f"Model artifacts not found in {self.models_dir}. Predictor in UNTRAINED state.")
@@ -109,6 +116,7 @@ class EnviroTrustPredictor:
             self.detector = None
             self.preprocessor = None
             self.rules = None
+            self.cusum = None
             self.metadata = {}
             return False
 
@@ -120,6 +128,8 @@ class EnviroTrustPredictor:
             # Rules are optional: models trained before the rule layer existed run without them
             rules_path = self.models_dir / self.rules_filename
             self.rules = PhysicalConsistencyChecker.load(rules_path) if rules_path.exists() else None
+            cusum_path = self.models_dir / self.cusum_filename
+            self.cusum = CusumDetector.load(cusum_path) if cusum_path.exists() else None
             self._configure_rolling()
             self.is_loaded = True
             self.model_mode = self.model_mode_override or self.metadata.get("model_mode", default_mode)
@@ -195,6 +205,27 @@ class EnviroTrustPredictor:
             else:
                 buf.append(entry)
 
+    def _apply_cusum(
+        self, df_mapped: pd.DataFrame, source_record: Dict[str, Any]
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Advance the sensor's CUSUM statistics by this reading. Returns (alarms, pending update).
+        A retried reading (same readingId as the last one) is applied to the state from before
+        that reading, so retries do not accumulate the same deviation twice.
+        """
+        key = str(source_record.get("sensorId") or DEFAULT_STREAM_KEY)
+        reading_id = source_record.get("readingId")
+        with self._history_lock:
+            prev = self._cusum_states.get(key)
+        if prev is None:
+            before = self.cusum.initial_state()
+        elif reading_id is not None and prev["readingId"] == reading_id:
+            before = prev["before"]
+        else:
+            before = prev["after"]
+        after = self.cusum.step(before, df_mapped.iloc[0].to_dict())
+        return self.cusum.alarms(after), {"key": key, "readingId": reading_id, "before": before, "after": after}
+
     def is_trained(self) -> bool:
         """Check if model and preprocessor are loaded and ready for inference."""
         return self.is_loaded and self.detector is not None and self.preprocessor is not None
@@ -226,6 +257,7 @@ class EnviroTrustPredictor:
             "hyperparameters": self.metadata.get("hyperparameters", {}),
             "rolling_features": self.metadata.get("rolling_features"),
             "consistency_rules": self.rules.to_dict() if self.rules is not None else None,
+            "cusum": self.cusum.to_dict() if self.cusum is not None else None,
         }
 
     def _format_cod_record(self, record: Dict[str, Any]) -> pd.DataFrame:
@@ -337,17 +369,30 @@ class EnviroTrustPredictor:
         if self.rolling_features:
             df_mapped, history_entry, rolling_window_filled = self._apply_rolling(df_mapped, source_record)
 
+        # CUSUM runs on raw mapped values, like the rules; committed only once the record is accepted
+        cusum_alarms: List[Dict[str, Any]] = []
+        cusum_update: Optional[Dict[str, Any]] = None
+        if self.cusum is not None:
+            cusum_alarms, cusum_update = self._apply_cusum(df_mapped, source_record)
+
         # Preprocessor transform checks required features and raises MissingFeatureError if absent
         # allow_missing_columns=False ensures no silent fabrication of missing features
         X = self.preprocessor.transform(df_mapped, allow_missing_columns=False)
         if history_entry is not None:
             self._remember(source_record.get("sensorId"), history_entry)
+        if cusum_update is not None:
+            with self._history_lock:
+                self._cusum_states[cusum_update["key"]] = cusum_update
 
         scores = self.detector.compute_anomaly_scores(X)
         score = float(scores[0])
         threshold = float(self.detector.calibrated_threshold)
         iforest_flag = bool(score >= threshold)
-        detection_sources = (["isolation_forest"] if iforest_flag else []) + (["physical_rules"] if violations else [])
+        detection_sources = (
+            (["isolation_forest"] if iforest_flag else [])
+            + (["physical_rules"] if violations else [])
+            + (["cusum"] if cusum_alarms else [])
+        )
         is_anomaly = bool(detection_sources)
         status = "SUSPICIOUS" if is_anomaly else "CONSISTENT"
 
@@ -360,6 +405,7 @@ class EnviroTrustPredictor:
             "is_anomaly": is_anomaly,
             "isolation_forest_flag": iforest_flag,
             "rule_violations": violations,
+            "cusum_alarms": cusum_alarms,
             "detection_sources": detection_sources,
             "rolling_window_filled": rolling_window_filled,
             "status": status,

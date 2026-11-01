@@ -1,0 +1,57 @@
+{
+  "enabled": true,
+  "k": 1.0,
+  "h": 4.0,
+  "group_column": "sensorId",
+  "timestamp_column": "timestamp",
+  "calibration": {
+    "strategy": "validation_peak",
+    "validation_samples": 170,
+    "validation_peak_statistic": 2.7121,
+    "h_margin": 0.25,
+    "h_min": 4.0,
+    "h": 4.0
+  },
+  "features": {
+    "COD_mg_L": {
+      "mean": 5765.523721,
+      "std": 764.551005
+    },
+    "BOD_mg_L": {
+      "mean": 1408.891647,
+      "std": 201.406348
+    },
+    "pH": {
+      "mean": 6.835368,
+      "std": 0.304317
+    },
+    "TDS_mg_L": {
+      "mean": 2852.837618,
+      "std": 272.765671
+    },
+    "turbidity_NTU": {
+      "mean": 321.624559,
+      "std": 74.250144
+    },
+    "colour_PtCo": {
+      "mean": 2763.583088,
+      "std": 360.258339
+    },
+    "total_solids_mg_L": {
+      "mean": 3230.713382,
+      "std": 290.431919
+    },
+    "total_suspended_solids_mg_L": {
+      "mean": 378.208544,
+      "std": 82.19628
+    },
+    "chloride_mg_L": {
+      "mean": 342.225794,
+      "std": 40.287565
+    },
+    "sulphate_mg_L": {
+      "mean": 428.37225,
+      "std": 54.837957
+    }
+  }
+}

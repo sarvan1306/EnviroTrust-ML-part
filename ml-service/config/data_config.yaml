@@ -134,6 +134,20 @@ rolling_features:
   group_column: "sensorId"      # Separate stream per sensor; absent column = one stream
   timestamp_column: "timestamp"
 
+# CUSUM Sustained-Shift Detector (slow sensor bias / calibration drift)
+# Two-sided per-feature CUSUM on values standardized by the NORMAL training mean/std; a separate
+# explainable detection source next to Isolation Forest and the rules. Fitted only when the
+# timestamp column is present. At inference the predictor keeps the statistics per sensorId.
+cusum:
+  enabled: true
+  k: 1.0                        # Allowance (std units). 0.5 is textbook but false-alarms on daily cycles
+  h: null                       # Decision threshold; null = calibrate on the normal validation stream
+  h_margin: 0.25                # Calibrated h = validation peak statistic * (1 + h_margin) ...
+  h_min: 4.0                    # ... never below h_min
+  base_features: null           # null = all configured numerical features present in the data
+  group_column: "sensorId"
+  timestamp_column: "timestamp"
+
 # Data Splitting Strategy
 splitting:
   strategy: "chronological"     # 'chronological' (time-series) or 'random' (non-time-series)
@@ -210,3 +224,4 @@ artifacts:
   preprocessor_filename: "preprocessor.joblib"
   metadata_filename: "model_metadata.json"
   rules_filename: "consistency_rules.json"
+  cusum_filename: "cusum.json"

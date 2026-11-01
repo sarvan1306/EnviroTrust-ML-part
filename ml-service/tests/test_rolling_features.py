@@ -180,7 +180,8 @@ def test_stuck_sensor_at_plausible_value_is_flagged_by_isolation_forest(demo_set
     assert all(r["rule_violations"] == [] for r in stuck)
     # Once the window holds only frozen values, every reading is flagged by Isolation Forest
     assert all(r["isolation_forest_flag"] and r["status"] == "SUSPICIOUS" for r in stuck[4:])
-    assert all(r["detection_sources"] == ["isolation_forest"] for r in stuck[4:])
+    # CUSUM may also alarm when the frozen value sits off the normal mean; the rules never do
+    assert all("physical_rules" not in r["detection_sources"] for r in stuck)
 
 
 def test_retried_reading_is_not_mistaken_for_a_stuck_sensor(demo_setup):

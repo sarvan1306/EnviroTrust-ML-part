@@ -1,7 +1,7 @@
 {
   "model_version": "iforest-demo-v1.0",
   "algorithm": "sklearn.ensemble.IsolationForest",
-  "training_timestamp_utc": "2026-11-01T02:57:13.514482+00:00",
+  "training_timestamp_utc": "2026-11-01T03:44:36.436653+00:00",
   "source_dataset": "/Users/shivsarvansistla/EnviroTrust-ML-part/ml-service/data/synthetic_demo/normal_demo.csv",
   "has_ground_truth_labels": false,
   "label_column": null,
@@ -142,9 +142,17 @@
     "feature_envelopes": 10,
     "ratio_bands": 2
   },
+  "cusum": {
+    "enabled": true,
+    "artifact": "cusum.json",
+    "k": 1.0,
+    "h": 4.0,
+    "features": 10
+  },
   "validation_flag_rates": {
     "isolation_forest": 0.0118,
     "consistency_rules": 0.0294,
+    "cusum": 0.0,
     "combined": 0.0353
   },
   "model_mode": "SYNTHETIC_DEMO",

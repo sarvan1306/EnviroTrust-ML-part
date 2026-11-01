@@ -2,7 +2,8 @@
 EnviroTrust ML Service — Evaluation Module
 
 Provides quantitative evaluation metrics for Isolation Forest anomaly detection,
-combined with the physical consistency rule layer when its artifact is present.
+combined with the physical consistency rule layer and the CUSUM sustained-shift detector
+when their artifacts are present.
 Supports both unsupervised operational distributions and supervised benchmark metrics
 (precision, recall, F1-score, false positive rate, detection rate, ROC-AUC)
 when labeled test cases (string or numerical) are available.
@@ -18,6 +19,7 @@ from sklearn.metrics import confusion_matrix, roc_auc_score, f1_score, precision
 
 from anomaly_detection import IsolationForestDetector, ModelNotTrainedError
 from consistency_rules import PhysicalConsistencyChecker
+from cusum import CusumDetector
 from data_loader import load_config, load_dataset
 from data_validator import parse_label_value, DEFAULT_NORMAL_LABELS, DEFAULT_ANOMALY_LABELS
 from feature_engineering import FeatureEngineeringPipeline
@@ -101,6 +103,8 @@ def evaluate_dataset(
     preprocessor = DataPreprocessor.load(prep_path)
     rules_path = m_dir / art_cfg.get("rules_filename", "consistency_rules.json")
     rules = PhysicalConsistencyChecker.load(rules_path) if rules_path.exists() else None
+    cusum_path = m_dir / art_cfg.get("cusum_filename", "cusum.json")
+    cusum = CusumDetector.load(cusum_path) if cusum_path.exists() else None
 
     if isinstance(data_path, pd.DataFrame):
         df_raw = data_path.copy()
@@ -133,15 +137,20 @@ def evaluate_dataset(
     # Transform without fitting (allow_missing_columns=False ensures strict schema validation)
     X = preprocessor.transform(df_features, allow_missing_columns=False)
 
-    # 3. Compute scores and threshold predictions, combined with physical rules on raw values
+    # 3. Compute scores and threshold predictions, combined with physical rules and CUSUM on raw values
     scores = detector.compute_anomaly_scores(X)
     threshold = float(detector.calibrated_threshold)
     iforest_predictions = (scores >= threshold).astype(int)
+    df_mapped = fe_pipeline.apply_column_mapping(df_raw)
     if rules is not None:
-        rule_predictions = rules.flags(fe_pipeline.apply_column_mapping(df_raw)).astype(int)
+        rule_predictions = rules.flags(df_mapped).astype(int)
     else:
         rule_predictions = np.zeros(len(scores), dtype=int)
-    predictions = iforest_predictions | rule_predictions
+    if cusum is not None:
+        cusum_predictions = cusum.flags(df_mapped).astype(int)
+    else:
+        cusum_predictions = np.zeros(len(scores), dtype=int)
+    predictions = iforest_predictions | rule_predictions | cusum_predictions
 
     score_dist = {
         "sample_count": int(len(scores)),
@@ -161,9 +170,11 @@ def evaluate_dataset(
         "evaluation_dataset": dataset_name,
         "score_distribution": score_dist,
         "consistency_rules_applied": rules is not None,
+        "cusum_applied": cusum is not None,
         "flag_counts": {
             "isolation_forest": int(iforest_predictions.sum()),
             "consistency_rules": int(rule_predictions.sum()),
+            "cusum": int(cusum_predictions.sum()),
             "combined": int(predictions.sum()),
         },
     }
@@ -175,6 +186,8 @@ def evaluate_dataset(
         report["isolation_forest_only_metrics"] = _supervised_metrics(labels, iforest_predictions, scores)
         if rules is not None:
             report["consistency_rules_only_metrics"] = _supervised_metrics(labels, rule_predictions)
+        if cusum is not None:
+            report["cusum_only_metrics"] = _supervised_metrics(labels, cusum_predictions)
 
         if group_column and group_column in df_raw.columns:
             groups = df_raw[group_column].astype(str).to_numpy()
@@ -186,6 +199,7 @@ def evaluate_dataset(
                     "flag_rate_combined": round(float(predictions[mask].mean()), 4),
                     "flag_rate_isolation_forest": round(float(iforest_predictions[mask].mean()), 4),
                     "flag_rate_consistency_rules": round(float(rule_predictions[mask].mean()), 4),
+                    "flag_rate_cusum": round(float(cusum_predictions[mask].mean()), 4),
                 }
             report["per_group_breakdown"] = breakdown
 

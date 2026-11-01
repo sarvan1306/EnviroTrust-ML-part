@@ -486,6 +486,11 @@ def evaluate_demo_model(
     cfg["splitting"]["test_ratio"] = holdout_ratio
     _, df_test_norm = split_holdout_test(df_norm, cfg)
 
+    # Each scenario is scored as its own sensor stream. In one continuous stream, sequential
+    # detectors (rolling windows, CUSUM) carry state from one scenario into the next: a large
+    # low_cod shift would keep CUSUM alarming through every later scenario.
+    df_test_norm = df_test_norm.assign(sensorId="DEMO-normal")
+    df_atk = df_atk.assign(sensorId="DEMO-" + df_atk["attack_type"].astype(str))
     df_test_combined = pd.concat([df_test_norm, df_atk], ignore_index=True)
     cfg["artifacts"]["model_filename"] = "isolation_forest_demo.joblib"
     cfg["artifacts"]["preprocessor_filename"] = "preprocessor_demo.joblib"
@@ -510,6 +515,7 @@ def evaluate_demo_model(
         "metrics": eval_results.get("supervised_metrics", {}),
         "isolation_forest_only_metrics": eval_results.get("isolation_forest_only_metrics", {}),
         "consistency_rules_only_metrics": eval_results.get("consistency_rules_only_metrics", {}),
+        "cusum_only_metrics": eval_results.get("cusum_only_metrics", {}),
         "per_scenario": eval_results.get("per_group_breakdown", {}),
         "score_distribution": eval_results.get("score_distribution", {}),
         "disclaimer": (

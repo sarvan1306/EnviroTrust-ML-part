@@ -10,6 +10,8 @@ Supports:
   5. Persistence of exact training feature schema alongside artifacts
   6. Held-out test reservation (splitting.test_ratio), never used for fitting or calibration
   7. Physical consistency rule envelopes learned on normal training records
+  8. CUSUM sustained-shift baseline learned on normal training records, threshold calibrated
+     on the normal validation stream (temporal datasets only)
 """
 
 import argparse
@@ -24,6 +26,7 @@ from sklearn.model_selection import train_test_split
 
 from anomaly_detection import IsolationForestDetector
 from consistency_rules import PhysicalConsistencyChecker
+from cusum import CusumDetector
 from data_loader import load_config, load_dataset, inspect_dataset, format_inspection_report
 from data_validator import DataValidator, DataValidationError, parse_label_value
 from feature_engineering import FeatureEngineeringPipeline
@@ -290,6 +293,21 @@ def run_training(
     val_rule_flags = rules.flags(df_val_calib_features)
     val_iforest_flags = val_normal_scores >= threshold
 
+    # 10b. CUSUM: baseline from normal training values, threshold from the normal validation
+    # stream in time order. Needs a timestamp: row order of non-temporal data is meaningless.
+    cusum = CusumDetector(config)
+    cusum_active = cusum.enabled and cusum.timestamp_column in df_raw.columns
+    if cusum_active:
+        df_val_calib_mapped = fe_pipeline.apply_column_mapping(df_val_calib)
+        cusum.fit(df_train_features)
+        cusum.calibrate(df_val_calib_mapped)
+        val_cusum_flags = cusum.flags(df_val_calib_mapped)
+    else:
+        if cusum.enabled:
+            logger.info(f"CUSUM skipped: timestamp column '{cusum.timestamp_column}' not present (non-temporal dataset).")
+        val_cusum_flags = np.zeros(len(val_rule_flags), dtype=bool)
+    val_combined_flags = val_iforest_flags | val_rule_flags | val_cusum_flags
+
     # 11. Save Artifacts
     art_cfg = config.get("artifacts", {})
     models_dir = Path(art_cfg.get("models_dir", "models"))
@@ -299,10 +317,16 @@ def run_training(
     prep_path = models_dir / art_cfg.get("preprocessor_filename", "preprocessor.joblib")
     meta_path = models_dir / art_cfg.get("metadata_filename", "model_metadata.json")
     rules_path = models_dir / art_cfg.get("rules_filename", "consistency_rules.json")
+    cusum_path = models_dir / art_cfg.get("cusum_filename", "cusum.json")
 
     detector.save(model_path)
     preprocessor.save(prep_path)
     rules.save(rules_path)
+    if cusum_active:
+        cusum.save(cusum_path)
+    elif cusum_path.exists():
+        # A stale baseline from an earlier model must not be paired with this one
+        cusum_path.unlink()
 
     # Exact training schema recorded
     training_schema = preprocessor.get_training_schema()
@@ -368,10 +392,18 @@ def run_training(
             "feature_envelopes": len(rules.envelopes),
             "ratio_bands": len(rules.ratio_bands),
         },
+        "cusum": {
+            "enabled": cusum_active,
+            "artifact": cusum_path.name if cusum_active else None,
+            "k": cusum.k,
+            "h": cusum.h if cusum_active else None,
+            "features": len(cusum.features),
+        },
         "validation_flag_rates": {
             "isolation_forest": round(float(np.mean(val_iforest_flags)), 4) if len(val_iforest_flags) else None,
             "consistency_rules": round(float(np.mean(val_rule_flags)), 4) if len(val_rule_flags) else None,
-            "combined": round(float(np.mean(val_iforest_flags | val_rule_flags)), 4) if len(val_rule_flags) else None,
+            "cusum": round(float(np.mean(val_cusum_flags)), 4) if len(val_cusum_flags) else None,
+            "combined": round(float(np.mean(val_combined_flags)), 4) if len(val_combined_flags) else None,
         },
     }
 

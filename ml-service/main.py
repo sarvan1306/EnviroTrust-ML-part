@@ -233,6 +233,9 @@ class CodAnalysisResponse(BaseModel):
     is_anomaly: bool
     isolation_forest_flag: Optional[bool] = Field(None, description="Isolation Forest score >= calibrated threshold")
     rule_violations: List[Dict[str, Any]] = Field(default_factory=list, description="Failed physical consistency checks")
+    cusum_alarms: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Sustained-shift (CUSUM) alarms for this sensor stream"
+    )
     detection_sources: List[str] = Field(default_factory=list, description="Detectors that flagged the reading")
     rolling_window_filled: Optional[bool] = Field(
         None, description="Rolling-window (stuck-sensor) features had enough sensor history; null if the model has none"
@@ -274,6 +277,9 @@ class TelemetryAnalysisResponse(BaseModel):
     is_anomaly: bool
     isolation_forest_flag: Optional[bool] = Field(None, description="Isolation Forest score >= calibrated threshold")
     rule_violations: List[Dict[str, Any]] = Field(default_factory=list, description="Failed physical consistency checks")
+    cusum_alarms: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Sustained-shift (CUSUM) alarms for this sensor stream"
+    )
     detection_sources: List[str] = Field(default_factory=list, description="Detectors that flagged the reading")
     rolling_window_filled: Optional[bool] = Field(
         None, description="Rolling-window (stuck-sensor) features had enough sensor history; null if the model has none"
@@ -363,6 +369,7 @@ def analyze_telemetry(
             is_anomaly=result["is_anomaly"],
             isolation_forest_flag=result.get("isolation_forest_flag"),
             rule_violations=result.get("rule_violations", []),
+            cusum_alarms=result.get("cusum_alarms", []),
             detection_sources=result.get("detection_sources", []),
             rolling_window_filled=result.get("rolling_window_filled"),
             status=result["status"],
@@ -446,6 +453,7 @@ def analyze_cod(
             is_anomaly=result["is_anomaly"],
             isolation_forest_flag=result.get("isolation_forest_flag"),
             rule_violations=result.get("rule_violations", []),
+            cusum_alarms=result.get("cusum_alarms", []),
             detection_sources=result.get("detection_sources", []),
             rolling_window_filled=result.get("rolling_window_filled"),
             status=result["status"],

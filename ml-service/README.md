@@ -38,6 +38,7 @@ EnviroTrust-ML-part/
     │       ├── isolation_forest_demo.joblib
     │       ├── preprocessor_demo.joblib
     │       ├── consistency_rules.json   # Learned envelopes (human-auditable JSON)
+    │       ├── cusum.json               # CUSUM baseline & threshold (human-auditable JSON)
     │       └── model_metadata.json
     ├── src/
     │   ├── __init__.py
@@ -48,6 +49,7 @@ EnviroTrust-ML-part/
     │   ├── test_authentic_data_integration.py
     │   ├── test_bangladesh_textile_integration.py # 15-factory SCADA & effluent tests
     │   ├── test_consistency_rules.py # Rule layer, held-out split, per-scenario eval
+    │   ├── test_cusum.py            # CUSUM recursion, calibration, per-sensor state, bias detection
     │   ├── test_data_loader.py
     │   ├── test_data_validator.py
     │   ├── test_evaluation.py
@@ -62,6 +64,7 @@ EnviroTrust-ML-part/
     │   └── test_train_pipeline.py
     ├── anomaly_detection.py         # Isolation Forest wrapper & threshold calibration
     ├── consistency_rules.py         # Physical invariants & learned operating envelopes
+    ├── cusum.py                     # CUSUM sustained-shift detector (slow sensor bias)
     ├── data_loader.py               # Ingestion, profiling, & parameter table transposition
     ├── data_profile.md              # Authentic data profiling & readiness report
     ├── data_validator.py            # Candidate validation, label hygiene, and temporal checks
@@ -154,6 +157,20 @@ Isolation Forest scores the joint feature space. A single absurd measurement (e.
 | `ratio_band` | Learned | BOD/COD and turbidity/TSS ratio bands from normal training data |
 
 Envelopes are learned from **normal training records only** and saved as `consistency_rules.json` next to the model. Rules evaluate raw measurements, never imputed values: a missing measurement is skipped. Settings live under `consistency_rules` in `config/data_config.yaml`.
+
+---
+
+## CUSUM Sustained-Shift Detection
+
+Isolation Forest and the rules judge one reading at a time. A sensor that slowly develops a bias (calibration drift, probe fouling) keeps producing individually plausible readings and is never flagged. `cusum.py` runs a two-sided tabular CUSUM per measurement and per sensor stream, accumulating small persistent deviations from the normal baseline:
+
+$$z_t = \frac{x_t - \mu}{\sigma}, \quad S^+_t = \max(0,\ S^+_{t-1} + z_t - k), \quad S^-_t = \max(0,\ S^-_{t-1} - z_t - k), \quad \text{alarm if } S^\pm_t \ge h$$
+
+* $\mu$, $\sigma$ are learned from **normal training records only**. $h$ is calibrated on the normal validation stream (peak statistic × 1.25, never below 4). Both are saved as `cusum.json` next to the model.
+* **k = 1.0**, not the textbook 0.5. At 0.5 the normal daily COD cycle alone accumulates into alarms (13% of normal held-out readings in testing). The cost is delay: on the demo model a 1σ bias first alarms after 33–66 readings (5.5–11 hours at 10-minute readings) and a 1.5σ bias after 20–30, depending on the feature.
+* Alarms are explainable (`cusum_alarms`: feature, `upward`/`downward`, statistic, threshold) and add `cusum` to `detection_sources`. The statistic does not reset on alarm: a sustained shift keeps alarming until the reading returns to normal and the statistic decays.
+* Fitted only for datasets with a timestamp column. At inference the statistics are kept per `sensorId` in memory (reset on restart or model reload, and per process). A retried `readingId` is not counted twice.
+* **Not a fix for everything:** a sensor stuck exactly at its normal mean produces $z \approx 0$ and never alarms (the rolling-window features cover that case), and the first readings of a slow ramp are inside normal noise for every detector.
 
 ---
 
@@ -461,27 +478,30 @@ Measured on 150 **held-out** normal records and all 200 attack records (`python 
 
 | Detector | Recall | False-positive rate | Precision |
 | :--- | :--- | :--- | :--- |
-| Isolation Forest only | 69.5% | 1.3% (2/150) | 98.6% |
+| Isolation Forest only | 64.5% | 1.3% (2/150) | 98.5% |
 | Physical rules only | 93.0% | 0.0% (0/150) | 100% |
+| CUSUM only | 87.0% | 0.0% (0/150) | 100% |
 | **Combined** | **97.0%** | **1.3% (2/150)** | **99.0%** |
 
-| Scenario | Isolation Forest | Combined |
-| :--- | :--- | :--- |
-| `low_cod` | 91% | 100% |
-| `high_cod` | 85% | 100% |
-| `cod_turbidity_decoupling` | 85% | 100% |
-| `sudden_spike` | 64% | 100% |
-| `gradual_drift` | 9% | 86% |
-| `sensor_flatline` | 88% | 97% |
+| Scenario | Isolation Forest | Rules | CUSUM | Combined |
+| :--- | :--- | :--- | :--- | :--- |
+| `low_cod` | 88% | 100% | 100% | 100% |
+| `high_cod` | 76% | 100% | 100% | 100% |
+| `cod_turbidity_decoupling` | 73% | 100% | 100% | 100% |
+| `sudden_spike` | 58% | 100% | 100% | 100% |
+| `gradual_drift` | 9% | 86% | 83% | 86% |
+| `sensor_flatline` | 88% | 73% | 39% | 97% |
+
+Each scenario is scored as its own sensor stream (`sensorId` per scenario). Scored as one continuous stream, sequential detectors carry state between scenarios: the large `low_cod` shift alone kept CUSUM alarming through every later scenario (100% everywhere), which says nothing about detection.
 
 > [!WARNING]
 > **How to read these numbers:**
 > - The rules check relationships the generator itself encodes (e.g. turbidity ≈ 0.85 × TSS), so high synthetic recall is expected and does **not** transfer automatically to real telemetry.
 > - `sensor_flatline` is caught by the rolling-window features (Isolation Forest 0% → 88%), including flatlines at plausible values that pass every rule (`tests/test_rolling_features.py`). The remaining 12% are the first 4 frozen readings, whose window still contains earlier non-frozen values; a stuck sensor is only detectable once a full window of identical readings exists.
 > - The Isolation Forest gains on the other scenarios are partly a generator artefact: each scenario is a contiguous block of attack rows whose variance differs from normal operation. Do not expect the same lift on real, isolated attacks.
-> - `gradual_drift` is still caught almost only by the rule envelope; a 5-reading std does not capture slow trends.
+> - **CUSUM does not raise combined recall on these scenarios.** Every attack it catches here is already caught by the rules or Isolation Forest. On `gradual_drift`, the rule envelope alarms by the 4th reading and CUSUM by the 7th; the first 5 drift readings are inside normal noise for every detector. CUSUM's value is a bias that stays inside the envelope, which no scenario here simulates: for a chloride probe reading 1.5σ low, the rules catch the ~10% of readings that fall off the envelope tail, while CUSUM first alarms at the 20th reading and flags every reading from the 30th onward (`tests/test_cusum.py`).
 > - Precision depends on the 150:200 normal-to-attack mix in the test set. Real attack prevalence is far lower, so real-world precision would be lower at the same false-positive rate.
-> - A 0.7% false-positive rate on 150 samples is a single reading; its confidence interval is wide.
+> - A 1.3% false-positive rate on 150 samples is two readings; its confidence interval is wide. CUSUM's 0/150 is equally limited evidence for its long-run false-alarm rate.
 
 ---
 
