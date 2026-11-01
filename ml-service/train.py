@@ -211,6 +211,11 @@ def run_training(
         raise DataValidationError(f"Dataset validation failed: {report.errors}")
     logger.info("Dataset validation passed successfully.")
 
+    # Rolling-window features are computed on the complete chronological stream, before any
+    # split or label filter, so trailing windows never span gaps left by removed rows
+    fe_pipeline = FeatureEngineeringPipeline(config)
+    df_raw = fe_pipeline.add_rolling_features(df_raw)
+
     # 4. Held-out test reservation, then Train/Validation splitting (Chronological or Random)
     df_dev, df_holdout = split_holdout_test(df_raw, config)
 
@@ -218,7 +223,7 @@ def run_training(
     if resolved_val_path and Path(resolved_val_path).exists():
         logger.info(f"Loading separate validation dataset from: {resolved_val_path}")
         df_train_raw = df_dev.copy()
-        df_val_raw = load_dataset(resolved_val_path)
+        df_val_raw = fe_pipeline.add_rolling_features(load_dataset(resolved_val_path))
     else:
         df_train_raw, df_val_raw = split_dataset(df_dev, config)
 
@@ -257,7 +262,6 @@ def run_training(
         df_val_anomalies = pd.DataFrame()
 
     # 6. Feature Engineering & Column Mapping
-    fe_pipeline = FeatureEngineeringPipeline(config)
     df_train_features = fe_pipeline.process(df_train_fit)
     df_val_calib_features = fe_pipeline.process(df_val_calib)
 
@@ -278,8 +282,11 @@ def run_training(
     threshold = detector.calibrate_threshold(X_val_calib)
     val_normal_scores = detector.compute_anomaly_scores(X_val_calib)
 
-    # 10. Fit Physical Consistency Rules on raw (unimputed) normal training features
-    rules = PhysicalConsistencyChecker(config).fit(df_train_features)
+    # 10. Fit Physical Consistency Rules on raw (unimputed) normal training features.
+    # Rolling features belong to Isolation Forest; rules stay per-reading checks.
+    rules = PhysicalConsistencyChecker(config).fit(
+        df_train_features.drop(columns=fe_pipeline.rolling_features, errors="ignore")
+    )
     val_rule_flags = rules.flags(df_val_calib_features)
     val_iforest_flags = val_normal_scores >= threshold
 
@@ -343,6 +350,12 @@ def run_training(
             "max_samples": detector.max_samples,
             "contamination": detector.contamination,
             "random_state": detector.random_state,
+        },
+        "rolling_features": {
+            "enabled": fe_pipeline.rolling_cfg["enabled"],
+            "window": fe_pipeline.rolling_cfg["window"],
+            "group_column": fe_pipeline.rolling_cfg["group_column"],
+            "features": [f for f in fe_pipeline.rolling_features if f in training_schema["numerical_features"]],
         },
         "holdout_test": {
             "test_ratio": float(config.get("splitting", {}).get("test_ratio", 0.0) or 0.0),

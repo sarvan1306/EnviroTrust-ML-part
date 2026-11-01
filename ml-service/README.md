@@ -128,6 +128,15 @@ $$\mathbf{x} = [\text{COD\_mg\_L}, \text{BOD\_mg\_L}, \text{pH}, \text{TDS\_mg\_
 3. **Threshold Calibration:** The alert threshold $T$ is empirically calibrated on clean normal validation data:
    $$T = \text{Percentile}_{99}(\text{Normal Validation Scores})$$
 
+### Rolling-Window Features (Stuck Sensor Detection)
+
+A single reading cannot show that a sensor is frozen: a stuck value can sit at a perfectly normal level. For each measurement, `feature_engineering.py` adds `<feature>_roll_log_std`, the log1p of the trailing-window standard deviation, computed per sensor stream (`sensorId`) in timestamp order (`rolling_features` in `config/data_config.yaml`, default window 5).
+
+* A stuck sensor drives the feature to exactly 0, far below the noise floor learned from normal data, so Isolation Forest isolates it quickly. The log scale matters: on a raw scale the 0 sits close to the training range and is rarely isolated (6% vs 88% on the synthetic `sensor_flatline` scenario).
+* Windows look backwards only and are computed on the full chronological stream before splitting or label filtering, so no future values leak in and windows never span removed rows.
+* Skipped for datasets without a timestamp column (row order of non-temporal data is meaningless). Rolling features are not given to the rule layer, which stays a per-reading check.
+* **Inference:** the predictor keeps the last few readings per `sensorId` in memory. The first `window - 1` readings of a sensor (and the first after a restart or model reload) have no full window; the feature is then imputed and `rolling_window_filled` is `false` in the response, meaning stuck-sensor detection is not yet active for that reading. A retried reading with the same `readingId` replaces the buffered one instead of counting as a repeat. The buffer is per process, so with several workers each sensor must be routed to one worker.
+
 ---
 
 ## Physical Consistency Rules
@@ -452,23 +461,25 @@ Measured on 150 **held-out** normal records and all 200 attack records (`python 
 
 | Detector | Recall | False-positive rate | Precision |
 | :--- | :--- | :--- | :--- |
-| Isolation Forest only | 10.5% | 0.7% (1/150) | 95.5% |
+| Isolation Forest only | 69.5% | 1.3% (2/150) | 98.6% |
 | Physical rules only | 93.0% | 0.0% (0/150) | 100% |
-| **Combined** | **93.0%** | **0.7% (1/150)** | **99.5%** |
+| **Combined** | **97.0%** | **1.3% (2/150)** | **99.0%** |
 
 | Scenario | Isolation Forest | Combined |
 | :--- | :--- | :--- |
-| `low_cod` | 0% | 100% |
-| `high_cod` | 12% | 100% |
-| `cod_turbidity_decoupling` | 48% | 100% |
-| `sudden_spike` | 0% | 100% |
-| `gradual_drift` | 3% | 86% |
-| `sensor_flatline` | 0% | 73% |
+| `low_cod` | 91% | 100% |
+| `high_cod` | 85% | 100% |
+| `cod_turbidity_decoupling` | 85% | 100% |
+| `sudden_spike` | 64% | 100% |
+| `gradual_drift` | 9% | 86% |
+| `sensor_flatline` | 88% | 97% |
 
 > [!WARNING]
 > **How to read these numbers:**
 > - The rules check relationships the generator itself encodes (e.g. turbidity ≈ 0.85 × TSS), so high synthetic recall is expected and does **not** transfer automatically to real telemetry.
-> - `sensor_flatline` and `gradual_drift` are temporal attacks. They are caught here only because the generator's attack rows also break a single-reading relationship (e.g. the frozen turbidity value is inconsistent with TSS) or drift outside the envelope. A genuine flatline at plausible values would not be detected until window-based checks are added.
+> - `sensor_flatline` is caught by the rolling-window features (Isolation Forest 0% → 88%), including flatlines at plausible values that pass every rule (`tests/test_rolling_features.py`). The remaining 12% are the first 4 frozen readings, whose window still contains earlier non-frozen values; a stuck sensor is only detectable once a full window of identical readings exists.
+> - The Isolation Forest gains on the other scenarios are partly a generator artefact: each scenario is a contiguous block of attack rows whose variance differs from normal operation. Do not expect the same lift on real, isolated attacks.
+> - `gradual_drift` is still caught almost only by the rule envelope; a 5-reading std does not capture slow trends.
 > - Precision depends on the 150:200 normal-to-attack mix in the test set. Real attack prevalence is far lower, so real-world precision would be lower at the same false-positive rate.
 > - A 0.7% false-positive rate on 150 samples is a single reading; its confidence interval is wide.
 

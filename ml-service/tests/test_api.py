@@ -199,7 +199,10 @@ def test_demo_model_status_returns_200(client: TestClient):
     assert data["data_provenance"] == "SYNTHETIC"
     assert data["model_version"] == "iforest-demo-v1.0"
     assert "feature_schema" in data
-    assert len(data["feature_schema"]["numerical_features"]) == 10
+    # 10 measurements plus one rolling-window (stuck-sensor) feature per measurement
+    num_features = data["feature_schema"]["numerical_features"]
+    assert len(num_features) == 20
+    assert len([f for f in num_features if f.endswith("_roll_log_std")]) == 10
     assert "threshold" in data
 
 
@@ -251,7 +254,8 @@ def test_analyze_telemetry_exact_request_response_demo(client: TestClient):
     assert data["model_mode"] == "SYNTHETIC_DEMO"
     assert data["data_provenance"] == "SYNTHETIC"
     assert isinstance(data["evaluated_features"], list)
-    assert len(data["evaluated_features"]) == 10
+    assert len(data["evaluated_features"]) == 20
+    assert isinstance(data["rolling_window_filled"], bool)
     assert "evaluated_at_utc" in data
 
 

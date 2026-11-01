@@ -17,6 +17,8 @@ from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
+from feature_engineering import rolling_feature_names
+
 logger = logging.getLogger("EnviroTrust.Preprocessing")
 
 
@@ -44,7 +46,8 @@ class DataPreprocessor:
         self.cat_encoding = prep_cfg.get("categorical_encoding", "onehot")
         self.scale_features = prep_cfg.get("scale_features", False)
 
-        self.configured_num_cols: List[str] = config.get("features", {}).get("numerical", [])
+        self.configured_num_cols: List[str] = list(config.get("features", {}).get("numerical", []))
+        self.configured_num_cols += [f for f in rolling_feature_names(config) if f not in self.configured_num_cols]
         self.configured_cat_cols: List[str] = config.get("features", {}).get("categorical", [])
 
         # State tracked after fitting

@@ -234,6 +234,9 @@ class CodAnalysisResponse(BaseModel):
     isolation_forest_flag: Optional[bool] = Field(None, description="Isolation Forest score >= calibrated threshold")
     rule_violations: List[Dict[str, Any]] = Field(default_factory=list, description="Failed physical consistency checks")
     detection_sources: List[str] = Field(default_factory=list, description="Detectors that flagged the reading")
+    rolling_window_filled: Optional[bool] = Field(
+        None, description="Rolling-window (stuck-sensor) features had enough sensor history; null if the model has none"
+    )
     status: str
     model_version: str
     model_mode: str = "AUTHENTIC"
@@ -272,6 +275,9 @@ class TelemetryAnalysisResponse(BaseModel):
     isolation_forest_flag: Optional[bool] = Field(None, description="Isolation Forest score >= calibrated threshold")
     rule_violations: List[Dict[str, Any]] = Field(default_factory=list, description="Failed physical consistency checks")
     detection_sources: List[str] = Field(default_factory=list, description="Detectors that flagged the reading")
+    rolling_window_filled: Optional[bool] = Field(
+        None, description="Rolling-window (stuck-sensor) features had enough sensor history; null if the model has none"
+    )
     status: str
     model_version: str
     model_mode: str = "AUTHENTIC"
@@ -358,6 +364,7 @@ def analyze_telemetry(
             isolation_forest_flag=result.get("isolation_forest_flag"),
             rule_violations=result.get("rule_violations", []),
             detection_sources=result.get("detection_sources", []),
+            rolling_window_filled=result.get("rolling_window_filled"),
             status=result["status"],
             model_version=result["model_version"],
             model_mode=result.get("model_mode", active_pred.model_mode),
@@ -440,6 +447,7 @@ def analyze_cod(
             isolation_forest_flag=result.get("isolation_forest_flag"),
             rule_violations=result.get("rule_violations", []),
             detection_sources=result.get("detection_sources", []),
+            rolling_window_filled=result.get("rolling_window_filled"),
             status=result["status"],
             model_version=result["model_version"],
             model_mode=result.get("model_mode", active_pred.model_mode),

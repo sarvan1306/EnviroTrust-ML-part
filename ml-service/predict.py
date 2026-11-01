@@ -7,19 +7,25 @@ and invokes the Isolation Forest detector.
 
 Strictly refuses to fabricate predictions if the authentic model has not been trained,
 and refuses to silently invent missing features required by the trained model.
+
+Rolling-window features need history a single record does not carry, so the predictor
+keeps the last few readings per sensorId in memory. The buffer is per process: with
+several workers, route each sensor to one worker or its windows will be incomplete.
 """
 
+from collections import deque
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+import threading
+from typing import Any, Deque, Dict, List, Optional, Tuple, Union
 import pandas as pd
 import numpy as np
 
 from anomaly_detection import IsolationForestDetector, ModelNotTrainedError
 from consistency_rules import PhysicalConsistencyChecker
 from data_loader import load_config
-from feature_engineering import FeatureEngineeringPipeline
+from feature_engineering import DEFAULT_STREAM_KEY, ROLLING_SUFFIX, FeatureEngineeringPipeline
 from preprocessing import DataPreprocessor, MissingFeatureError
 
 logger = logging.getLogger("EnviroTrust.Predict")
@@ -60,6 +66,11 @@ class EnviroTrustPredictor:
         self.model_mode: str = "AUTHENTIC"
         self.data_provenance: str = "AUTHENTIC"
 
+        # Rolling-window state: features the loaded model expects, and recent readings per sensor
+        self.rolling_features: List[str] = []
+        self._history: Dict[str, Deque[Dict[str, Any]]] = {}
+        self._history_lock = threading.Lock()
+
         # Attempt to load model on initialization
         self.reload()
 
@@ -88,6 +99,9 @@ class EnviroTrustPredictor:
         default_mode = "SYNTHETIC_DEMO" if is_demo_path else "AUTHENTIC"
         self.model_mode = self.model_mode_override or default_mode
         self.data_provenance = "SYNTHETIC" if self.model_mode == "SYNTHETIC_DEMO" else "AUTHENTIC"
+        self.rolling_features = []
+        with self._history_lock:
+            self._history = {}
 
         if not (model_path.exists() and prep_path.exists() and meta_path.exists()):
             logger.info(f"Model artifacts not found in {self.models_dir}. Predictor in UNTRAINED state.")
@@ -106,6 +120,7 @@ class EnviroTrustPredictor:
             # Rules are optional: models trained before the rule layer existed run without them
             rules_path = self.models_dir / self.rules_filename
             self.rules = PhysicalConsistencyChecker.load(rules_path) if rules_path.exists() else None
+            self._configure_rolling()
             self.is_loaded = True
             self.model_mode = self.model_mode_override or self.metadata.get("model_mode", default_mode)
             self.data_provenance = self.metadata.get("data_provenance", "SYNTHETIC" if self.model_mode == "SYNTHETIC_DEMO" else "AUTHENTIC")
@@ -115,6 +130,70 @@ class EnviroTrustPredictor:
             logger.error(f"Failed to load model artifacts from {self.models_dir}: {e}")
             self.is_loaded = False
             return False
+
+    def _configure_rolling(self) -> None:
+        """
+        Match rolling features to the loaded model rather than the current config, so a
+        config edit after training cannot silently change the window the model was fitted on.
+        """
+        self.rolling_features = [c for c in self.preprocessor.active_num_cols if c.endswith(ROLLING_SUFFIX)]
+        if not self.rolling_features:
+            self.fe_pipeline = FeatureEngineeringPipeline(self.config)
+            return
+        roll_meta = self.metadata.get("rolling_features") or {}
+        cfg = dict(self.config)
+        cfg["rolling_features"] = {
+            **(self.config.get("rolling_features") or {}),
+            **{k: roll_meta[k] for k in ("window", "group_column") if k in roll_meta},
+            "enabled": True,
+            "base_features": [c[: -len(ROLLING_SUFFIX)] for c in self.rolling_features],
+        }
+        self.fe_pipeline = FeatureEngineeringPipeline(cfg)
+
+    def _apply_rolling(
+        self, df_mapped: pd.DataFrame, source_record: Dict[str, Any]
+    ) -> Tuple[pd.DataFrame, Dict[str, Any], bool]:
+        """
+        Compute the record's rolling features from the sensor's buffered history.
+        Returns (frame with rolling columns, buffer entry to remember, window filled).
+        A retried reading (same readingId as the last buffered one) replaces it rather than
+        counting as a repeat, otherwise retries would look like a stuck sensor.
+        """
+        key = str(source_record.get("sensorId") or DEFAULT_STREAM_KEY)
+        ts_col = self.fe_pipeline.rolling_cfg["timestamp_column"]
+        row = df_mapped.iloc[0]
+        entry = {b: row.get(b, np.nan) for b in self.fe_pipeline.rolling_cfg["base_features"]}
+        entry[ts_col] = source_record.get("timestamp")
+        entry["readingId"] = source_record.get("readingId")
+
+        with self._history_lock:
+            history = list(self._history.get(key, ()))
+        if history and entry["readingId"] is not None and history[-1]["readingId"] == entry["readingId"]:
+            history = history[:-1]
+        keep = self.fe_pipeline.rolling_cfg["window"] - 1
+        history = history[-keep:] if keep > 0 else []
+
+        rolled = self.fe_pipeline.add_rolling_features(pd.DataFrame(history + [entry]), require_timestamp=False)
+        current = rolled[self.rolling_features].iloc[-1]
+
+        out = df_mapped.copy()
+        for col in self.rolling_features:
+            out[col] = current[col]
+        return out, entry, bool(current.notna().any())
+
+    def _remember(self, sensor_id: Optional[str], entry: Dict[str, Any]) -> None:
+        """
+        Append a scored reading to its sensor's history buffer. Keeps one reading more than a
+        window needs, so replacing a retried reading never shortens the next window.
+        """
+        key = str(sensor_id or DEFAULT_STREAM_KEY)
+        maxlen = self.fe_pipeline.rolling_cfg["window"]
+        with self._history_lock:
+            buf = self._history.setdefault(key, deque(maxlen=maxlen))
+            if buf and entry["readingId"] is not None and buf[-1]["readingId"] == entry["readingId"]:
+                buf[-1] = entry
+            else:
+                buf.append(entry)
 
     def is_trained(self) -> bool:
         """Check if model and preprocessor are loaded and ready for inference."""
@@ -145,6 +224,7 @@ class EnviroTrustPredictor:
             "threshold": self.detector.calibrated_threshold,
             "calibration_metadata": self.metadata.get("calibration_metadata", {}),
             "hyperparameters": self.metadata.get("hyperparameters", {}),
+            "rolling_features": self.metadata.get("rolling_features"),
             "consistency_rules": self.rules.to_dict() if self.rules is not None else None,
         }
 
@@ -250,9 +330,18 @@ class EnviroTrustPredictor:
         # Physical rules run on raw mapped values (before any imputation)
         violations = self.rules.check(df_mapped)[0] if self.rules is not None else []
 
+        # Rolling features from this sensor's recent readings (None when the model has none).
+        # Until the window fills they are NaN and imputed, so stuck-sensor detection is inactive.
+        rolling_window_filled: Optional[bool] = None
+        history_entry: Optional[Dict[str, Any]] = None
+        if self.rolling_features:
+            df_mapped, history_entry, rolling_window_filled = self._apply_rolling(df_mapped, source_record)
+
         # Preprocessor transform checks required features and raises MissingFeatureError if absent
         # allow_missing_columns=False ensures no silent fabrication of missing features
         X = self.preprocessor.transform(df_mapped, allow_missing_columns=False)
+        if history_entry is not None:
+            self._remember(source_record.get("sensorId"), history_entry)
 
         scores = self.detector.compute_anomaly_scores(X)
         score = float(scores[0])
@@ -272,6 +361,7 @@ class EnviroTrustPredictor:
             "isolation_forest_flag": iforest_flag,
             "rule_violations": violations,
             "detection_sources": detection_sources,
+            "rolling_window_filled": rolling_window_filled,
             "status": status,
             "model_version": self.metadata.get("model_version", "iforest-cod-v1.0"),
             "model_mode": self.model_mode,

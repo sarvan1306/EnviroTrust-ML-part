@@ -122,6 +122,18 @@ features:
     - "Unit of Measure"
     - "Sample Date"
 
+# Rolling-Window Features (stuck / frozen sensor detection)
+# Adds '<feature>_roll_log_std' = log1p(trailing-window std) per base measurement, per sensor
+# stream, as extra Isolation Forest inputs. A stuck sensor drives it to 0. Computed only when
+# the timestamp column is present (skipped for non-temporal datasets). At inference the
+# predictor keeps the last few readings per sensorId in memory.
+rolling_features:
+  enabled: true
+  window: 5                     # Readings per window (the first window-1 readings of a stream get NaN)
+  base_features: null           # null = all configured numerical features present in the data
+  group_column: "sensorId"      # Separate stream per sensor; absent column = one stream
+  timestamp_column: "timestamp"
+
 # Data Splitting Strategy
 splitting:
   strategy: "chronological"     # 'chronological' (time-series) or 'random' (non-time-series)

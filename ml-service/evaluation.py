@@ -128,7 +128,7 @@ def evaluate_dataset(
 
     # 2. Extract features using saved preprocessor schema
     fe_pipeline = FeatureEngineeringPipeline(config)
-    df_features = fe_pipeline.process(df_raw)
+    df_features = fe_pipeline.process(fe_pipeline.add_rolling_features(df_raw))
 
     # Transform without fitting (allow_missing_columns=False ensures strict schema validation)
     X = preprocessor.transform(df_features, allow_missing_columns=False)
